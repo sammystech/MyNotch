@@ -39,6 +39,11 @@ final class HitContainerView: NSView {
     // Clicks: always against what's visibly there.
     private func hitRect() -> NSRect {
         let s = NotchState.shared
+        // While a file drag is in flight, accept the whole top of the panel.
+        // Requiring the cursor to land on the bare 185x32pt notch mid-drag is
+        // why dropping "never worked" — you can't aim that precisely, and you
+        // can't click to open first because a drag is already in progress.
+        if s.fileDragArmed { return band(CGSize(width: bounds.width, height: 170)) }
         return band(s.expanded ? s.openSize : s.collapsedHitSize)
     }
 
@@ -81,6 +86,7 @@ final class HitContainerView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard hitRect().contains(point) else { return nil }
+        if NotchState.shared.fileDragArmed { return self }
         // Collapsed: the whole notch is one button — take the event ourselves
         // so mouseDown opens the panel. Open: let SwiftUI's controls have it.
         return NotchState.shared.expanded ? super.hitTest(point) : self
@@ -228,13 +234,87 @@ final class NotchController {
         DispatchQueue.main.async { [weak self] in self?.container.refresh() }
     }
 
+    // Watch for a file drag starting ANYWHERE on screen. AppKit only tells us
+    // about a drag once the cursor is already over a registered destination —
+    // useless when that destination is a 185x32pt notch you're trying to hit
+    // mid-drag. Monitoring globally lets us open the shelf as you approach.
+    private static let dragLog = ProcessInfo.processInfo.environment["MYNOTCH_DRAGLOG"] == "1"
+    private static func dlog(_ s: String) {
+        guard dragLog else { return }
+        FileHandle.standardError.write(("DRAG " + s + "\n").data(using: .utf8)!)
+    }
+
+    // NOTE: deliberately NO NSEvent global monitor here. Watching
+    // .leftMouseDragged globally can trigger macOS's Input Monitoring
+    // permission prompt — a scary ask for a notch app — and it isn't needed:
+    // pollCursor() already detects a real drag from pressedMouseButtons plus
+    // the drag pasteboard, neither of which needs any permission.
+
+    private var lastDragPBChange = -1
+
+    private func armIfFileDrag() {
+        guard !state.fileDragArmed else { return }
+        let pbNow = NSPasteboard(name: .drag).changeCount
+        guard pbNow != lastDragPBChange else { return }   // nothing new to inspect
+        lastDragPBChange = pbNow
+        Self.dlog("checking drag pasteboard")
+        // Only arm for actual files — never hijack a text selection or a
+        // window being dragged past the top of the screen.
+        let pb = NSPasteboard(name: .drag)
+        let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        guard pb.canReadObject(forClasses: [NSURL.self], options: opts) else {
+            Self.dlog("pasteboard has no file urls")
+            return
+        }
+        Self.dlog("ARMED")
+        state.fileDragArmed = true
+        container.refresh()
+    }
+
+    private func disarmFileDrag() {
+        guard state.fileDragArmed else { return }
+        state.fileDragArmed = false
+        withAnimation(Self.anim) { state.dragActive = false }
+        container.refresh()
+        pollCursor()
+    }
+
     private func pollCursor() {
+        // Primary file-drag detection: while a mouse button is held, look at the
+        // drag pasteboard directly. The global event monitor above is a faster
+        // path, but monitors can miss events; this poll cannot, so dragging a
+        // photo up to the notch reliably opens it with no click.
+        if NSEvent.pressedMouseButtons == 0 {
+            if state.fileDragArmed && !state.debugFakeDrag { disarmFileDrag() }
+        } else {
+            armIfFileDrag()
+        }
+
         let live = state.expanded ? state.openSize : state.collapsedHitSize
         let f = panel.frame
         // +1 above the screen top so the topmost cursor row counts as inside.
         let rect = NSRect(x: f.midX - live.width / 2, y: f.maxY - live.height,
                           width: live.width, height: live.height + 1)
         let mouse = NSEvent.mouseLocation
+
+        // Dragging files toward the top? Open the shelf on approach — no
+        // click required (and none is possible mid-drag).
+        if state.fileDragArmed, !state.expanded {
+            Self.dlog("armed; cursor=\(Int(mouse.x)),\(Int(mouse.y)) panelMaxY=\(Int(f.maxY))")
+            let approach = NSRect(x: f.midX - state.openWidth / 2,
+                                  y: f.maxY - 170, width: state.openWidth, height: 171)
+            if approach.contains(mouse) {
+                Self.dlog("OPENING on approach")
+                withAnimation(Self.anim) {
+                    state.peeking = false
+                    state.selected = .shelf
+                    state.dragActive = true
+                    state.expanded = true
+                }
+                lastInside = true
+                return
+            }
+        }
 
         // Safety net for a stuck drag. `interacting` (set while scrubbing the
         // progress bar or jogging the record) suppresses auto-close, and it's
@@ -279,6 +359,7 @@ final class NotchController {
     }
 
     private func haptic(_ pattern: NSHapticFeedbackManager.FeedbackPattern) {
+        guard Prefs.shared.haptics else { return }
         NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .default)
     }
 
@@ -293,7 +374,7 @@ final class NotchController {
         if inside {
             // Files waiting on the shelf? Hovering opens it straight away so
             // grabbing them back out is one motion, no click needed.
-            if !state.expanded && state.shelfHasFiles {
+            if !state.expanded && state.shelfHasFiles && Prefs.shared.shelfAutoOpen {
                 withAnimation(Self.anim) {
                     state.peeking = false
                     state.selected = .shelf

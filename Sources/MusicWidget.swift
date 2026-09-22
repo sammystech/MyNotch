@@ -187,7 +187,7 @@ final class MusicController: ObservableObject {
     // total degrees turned since grab → target position; speed drives the whir.
     func jog(totalDegrees deg: Double, speed: Double) {
         guard jogging, let np = now else { return }
-        scratch.update(speed: speed)
+        if Prefs.shared.scratchSound { scratch.update(speed: speed) }
         var target = jogStartPos + (deg / 360.0) * secondsPerRevolution
         if np.duration > 0 {
             target = min(np.duration, max(0, target))
@@ -343,6 +343,7 @@ final class MusicController: ObservableObject {
     }
 
     private func setIsland(_ active: Bool) {
+        let active = active && Prefs.shared.musicIsland
         guard NotchState.shared.musicActive != active else { return }
         withAnimation(.spring(response: 0.36, dampingFraction: 0.8)) {
             NotchState.shared.musicActive = active

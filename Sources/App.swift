@@ -10,7 +10,7 @@ struct NotchNookApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
         // No real window scene — the notch lives in its own borderless panel.
-        Settings { EmptyView() }
+        SwiftUI.Settings { EmptyView() }
     }
 }
 
@@ -26,7 +26,9 @@ final class NotchState: ObservableObject {
     @Published var hoveringArt = false        // cursor precisely on the island's album art
     @Published var dragActive = false         // a file drag is hovering the notch
     @Published var shelfHasFiles = false      // shelf non-empty → hover auto-opens, panel grows
+    @Published var fileDragArmed = false      // a file drag is happening ANYWHERE on screen
     var debugPinned = false                   // MYNOTCH_PIN=1: never auto-close (testing)
+    var debugFakeDrag = false                 // MYNOTCH_FAKEDRAG=1: hold the armed state (testing)
     @Published var selected: WidgetKind = .mirror
 
     // notchSize is measured from the hardware notch at launch.
@@ -52,7 +54,9 @@ final class NotchState: ObservableObject {
     var openSize: CGSize {
         if extended { return CGSize(width: openWidth, height: extendedHeight) }
         // Give the shelf more room the moment it's actually holding something.
-        let h = (selected == .shelf && shelfHasFiles) ? shelfHeight : compactHeight
+        // Shelf-with-files and Settings both want the roomier panel.
+        let roomy = (selected == .shelf && shelfHasFiles) || selected == .settings
+        let h = roomy ? shelfHeight : compactHeight
         return CGSize(width: openWidth, height: h)
     }
 
@@ -92,6 +96,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Debug hook for screenshot verification (MYNOTCH_EXPAND=1 [MYNOTCH_TAB=…]).
         let env = ProcessInfo.processInfo.environment
         if env["MYNOTCH_PIN"] == "1" { NotchState.shared.debugPinned = true }
+        if env["MYNOTCH_FAKEDRAG"] == "1" {
+            NotchState.shared.debugFakeDrag = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NotchState.shared.fileDragArmed = true }
+        }
         if env["MYNOTCH_EXPAND"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 if let tab = env["MYNOTCH_TAB"], let kind = WidgetKind(rawValue: tab) {
@@ -128,6 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         applyLoginItem(defaults.bool(forKey: launchKey))
         updateLoginMenuItem()
+        DispatchQueue.main.async { Prefs.shared.objectWillChange.send() }
     }
 
     private func applyLoginItem(_ on: Bool) {

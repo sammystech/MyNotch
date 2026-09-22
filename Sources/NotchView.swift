@@ -115,6 +115,7 @@ struct NotchRootView: View {
                 case .music:    MusicPanel(controller: music, turntable: turntable)
                 case .shelf:    ShelfPanel(controller: shelf)
                 case .calendar: CalendarPanel(controller: calendar)
+                case .settings: SettingsPanel()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -124,6 +125,23 @@ struct NotchRootView: View {
         .padding(.top, 0)
         .padding(.bottom, 16)
         // Tap-to-extend handle pinned to the bottom edge.
+        .overlay(alignment: .bottomLeading) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    state.selected = state.selected == .settings ? .mirror : .settings
+                }
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(state.selected == .settings ? 0.95 : 0.35))
+                    .frame(width: 26, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Settings")
+            .padding(.leading, 12)
+            .padding(.bottom, 1)
+        }
         .overlay(alignment: .bottom) {
             Button(action: toggleExtend) {
                 Image(systemName: state.extended ? "chevron.compact.up" : "chevron.compact.down")
