@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>MyNotch</string>
+    <key>CFBundleDisplayName</key>
+    <string>My Notch</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.sammittman.mynotch</string>
+    <key>CFBundleExecutable</key>
+    <string>MyNotch</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>NotchNook shows a live mirror of your camera in the notch.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>NotchNook shows today's events in the notch.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>NotchNook shows today's events in the notch.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>MyNotch reads Music and Spotify to show what's playing in the notch.</string>
+</dict>
+</plist>
