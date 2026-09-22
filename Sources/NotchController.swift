@@ -291,6 +291,17 @@ final class NotchController {
         lastInside = inside
         logTransition(inside)
         if inside {
+            // Files waiting on the shelf? Hovering opens it straight away so
+            // grabbing them back out is one motion, no click needed.
+            if !state.expanded && state.shelfHasFiles {
+                withAnimation(Self.anim) {
+                    state.peeking = false
+                    state.selected = .shelf
+                    state.expanded = true
+                }
+                haptic(.alignment)
+                return
+            }
             if !state.expanded && !state.peeking {
                 haptic(.alignment)
                 withAnimation(Self.anim) { state.peeking = true }

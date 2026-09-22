@@ -21,37 +21,62 @@ final class ShelfController: ObservableObject {
 
     @Published private(set) var items: [ShelfItem] = []
     @Published private(set) var thumbs: [UUID: NSImage] = [:]
+    @Published var landed: UUID?          // most recent arrival, for the drop pop
 
     private let storeKey = "shelfPaths"
 
     init() { restore() }
 
     func add(_ urls: [URL]) {
-        var added = false
+        var new: [ShelfItem] = []
         for url in urls {
             // Skip exact duplicates already on the shelf.
             guard !items.contains(where: { $0.url == url }) else { continue }
-            let item = ShelfItem(url: url)
-            items.append(item)
-            loadThumb(for: item)
-            added = true
+            new.append(ShelfItem(url: url))
         }
-        if added {
-            persist()
-            NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .default)
+        guard !new.isEmpty else { return }
+
+        // Bouncy spring so files visibly "land" on the shelf.
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.6)) {
+            items.append(contentsOf: new)
+        }
+        new.forEach(loadThumb)
+        landed = new.last?.id
+        persist()
+        syncState()
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .default)
+        // Clear the "just landed" marker after the pop finishes.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            if self?.landed == new.last?.id { self?.landed = nil }
+        }
+    }
+
+    /// Mirrors emptiness into NotchState — drives hover-to-open and panel height.
+    private func syncState() {
+        let has = !items.isEmpty
+        if NotchState.shared.shelfHasFiles != has {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) {
+                NotchState.shared.shelfHasFiles = has
+            }
         }
     }
 
     func remove(_ item: ShelfItem) {
-        items.removeAll { $0.id == item.id }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+            items.removeAll { $0.id == item.id }
+        }
         thumbs[item.id] = nil
         persist()
+        syncState()
     }
 
     func clear() {
-        items.removeAll()
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+            items.removeAll()
+        }
         thumbs.removeAll()
         persist()
+        syncState()
     }
 
     func revealInFinder(_ item: ShelfItem) {
@@ -94,6 +119,7 @@ final class ShelfController: ObservableObject {
             loadThumb(for: item)
         }
         if items.count != paths.count { persist() }   // prune stale entries
+        syncState()
     }
 }
 
@@ -132,18 +158,21 @@ struct ShelfPanel: View {
                     .padding(.bottom, 6)
 
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
+                        HStack(alignment: .top, spacing: 14) {
                             ForEach(controller.items) { item in
                                 ShelfTile(item: item,
                                           thumb: controller.thumbs[item.id],
                                           onRemove: { controller.remove(item) },
-                                          onReveal: { controller.revealInFinder(item) })
+                                          onReveal: { controller.revealInFinder(item) },
+                                          justLanded: controller.landed == item.id)
                             }
                         }
                         .padding(.horizontal, 12)
                         .padding(.bottom, 10)
                     }
+                    Spacer(minLength: 0)
                 }
+                .frame(maxHeight: .infinity, alignment: .top)
             }
 
             // Highlight the whole panel while a drag hovers.
@@ -161,6 +190,7 @@ private struct ShelfTile: View {
     let thumb: NSImage?
     let onRemove: () -> Void
     let onReveal: () -> Void
+    var justLanded: Bool = false
 
     var body: some View {
         VStack(spacing: 5) {
@@ -169,27 +199,31 @@ private struct ShelfTile: View {
                     if let thumb {
                         Image(nsImage: thumb).resizable().aspectRatio(contentMode: .fit)
                     } else {
-                        RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.08))
+                        RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08))
                     }
                 }
-                .frame(width: 54, height: 54)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(width: 86, height: 86)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 Button(action: onRemove) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.white, .black.opacity(0.75))
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white, .black.opacity(0.8))
                 }
                 .buttonStyle(.plain)
-                .offset(x: 6, y: -6)
+                .offset(x: 7, y: -7)
             }
             Text(item.name)
-                .font(.system(size: 9))
-                .foregroundColor(.white.opacity(0.65))
+                .font(.system(size: 10))
+                .foregroundColor(.white.opacity(0.7))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(width: 62)
+                .frame(width: 92)
         }
+        // Pops slightly oversized as it lands, then settles.
+        .scaleEffect(justLanded ? 1.12 : 1)
+        .animation(.spring(response: 0.3, dampingFraction: 0.5), value: justLanded)
+        .transition(.scale(scale: 0.4).combined(with: .opacity))
         // Drag back OUT to Finder, Mail, anywhere.
         .onDrag { NSItemProvider(contentsOf: item.url) ?? NSItemProvider() }
         .onTapGesture(count: 2) { onReveal() }

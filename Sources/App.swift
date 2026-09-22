@@ -25,6 +25,7 @@ final class NotchState: ObservableObject {
     @Published var interacting = false        // dragging inside (scrub) → don't auto-close
     @Published var hoveringArt = false        // cursor precisely on the island's album art
     @Published var dragActive = false         // a file drag is hovering the notch
+    @Published var shelfHasFiles = false      // shelf non-empty → hover auto-opens, panel grows
     var debugPinned = false                   // MYNOTCH_PIN=1: never auto-close (testing)
     @Published var selected: WidgetKind = .mirror
 
@@ -35,6 +36,7 @@ final class NotchState: ObservableObject {
     // states never resizes the window — only the SwiftUI content moves.
     let openWidth: CGFloat = 380
     let compactHeight: CGFloat = 220
+    let shelfHeight: CGFloat = 300      // roomier so files are easy to see/grab
     let extendedHeight: CGFloat = 400
 
     // Dynamic-island wings: extra width each side for album art + EQ bars.
@@ -47,7 +49,12 @@ final class NotchState: ObservableObject {
     let peekGrowH: CGFloat = 5
 
     var windowSize: CGSize { CGSize(width: openWidth, height: extendedHeight) }
-    var openSize: CGSize { CGSize(width: openWidth, height: extended ? extendedHeight : compactHeight) }
+    var openSize: CGSize {
+        if extended { return CGSize(width: openWidth, height: extendedHeight) }
+        // Give the shelf more room the moment it's actually holding something.
+        let h = (selected == .shelf && shelfHasFiles) ? shelfHeight : compactHeight
+        return CGSize(width: openWidth, height: h)
+    }
 
     // What the collapsed notch actually shows right now: bare notch, or the
     // music island (wings), grown slightly while peeking.
