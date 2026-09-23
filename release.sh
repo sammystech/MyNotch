@@ -5,6 +5,11 @@
 #
 #   ./release.sh 1.4.0 "What changed in this version"
 #
+# If Apple is slow and the wait times out, pick up the SAME upload (no new
+# version bump, no re-archive) with:
+#
+#   RESUME=1 ./release.sh 1.4.0 "notes"
+#
 # Requirements:
 #   * Xcode signed in to team CH6CSBA54G (Settings → Accounts), with its
 #     "Developer ID Application" certificate in the login keychain.
@@ -35,6 +40,16 @@ SIGN_IDENTITY=$(security find-identity -v -p codesigning \
   Xcode → Settings → Accounts → (team) → Manage Certificates → + → Developer ID Application"
 echo "  signing as: $SIGN_IDENTITY"
 
+RESUME="${RESUME:-}"
+WAIT_MIN="${NOTARY_WAIT_MIN:-30}"
+ARCHIVE="$BUILD_DIR/$APP_NAME.xcarchive"
+
+if [ "$RESUME" = 1 ]; then
+    [ -d "$ARCHIVE" ] || die "Nothing to resume: no archive at $ARCHIVE"
+    CUR=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
+    [ "$CUR" = "$VERSION" ] || die "Info.plist is at $CUR, not $VERSION — resume the version you uploaded."
+    say "Resuming $VERSION: waiting on the upload already with Apple…"
+else
 say "Bumping to $VERSION…"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Info.plist)
@@ -43,7 +58,6 @@ BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Info.plist)
 say "Archiving…"
 xcodegen generate >/dev/null
 rm -rf "$BUILD_DIR"; mkdir -p "$BUILD_DIR"
-ARCHIVE="$BUILD_DIR/$APP_NAME.xcarchive"
 xcodebuild -project MyNotch.xcodeproj -scheme MyNotch -configuration Release \
     -archivePath "$ARCHIVE" -derivedDataPath "$BUILD_DIR/dd" -allowProvisioningUpdates archive \
     > "$BUILD_DIR/archive.log" 2>&1 \
@@ -63,20 +77,29 @@ PLIST
 xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportOptionsPlist "$BUILD_DIR/ExportOptions.plist" \
     -exportPath "$BUILD_DIR/upload-receipt" -allowProvisioningUpdates > "$BUILD_DIR/export.log" 2>&1 \
     || { grep -iE "error" "$BUILD_DIR/export.log" | sort -u | head -20; die "Export/upload failed. Log: $BUILD_DIR/export.log"; }
-echo "  uploaded; waiting for Apple (usually a few minutes)"
+echo "  uploaded; waiting for Apple (usually a few minutes, first ones can take hours)"
+fi
 
 NOTARIZED="$BUILD_DIR/notarized"
-for attempt in $(seq 1 72); do          # 72 × 25s = 30 minutes
+rm -rf "$NOTARIZED"      # a previous (resumed) run may have exported it already
+TRIES=$(( WAIT_MIN * 60 / 25 ))
+for attempt in $(seq 1 "$TRIES"); do    # every 25s for WAIT_MIN minutes
     if xcodebuild -exportNotarizedApp -archivePath "$ARCHIVE" -exportPath "$NOTARIZED" \
             > "$BUILD_DIR/notarize.log" 2>&1; then
         echo "  notarized after ~$((attempt * 25))s"
         break
     fi
+    if grep -q "No Accounts" "$BUILD_DIR/notarize.log"; then
+        die "Xcode is signed out, so it can't ask Apple for the result.
+  Sign in: Xcode → Settings → Accounts → + → Apple ID (team $TEAM_ID), then:
+  RESUME=1 ./release.sh $VERSION \"notes\""
+    fi
     if grep -qiE "invalid|rejected|not accepted" "$BUILD_DIR/notarize.log"; then
         grep -iE "error|invalid|reject" "$BUILD_DIR/notarize.log" | head -10
         die "Apple rejected the submission. Details: Xcode → Window → Organizer → this archive."
     fi
-    [ "$attempt" -eq 72 ] && die "Still not notarized after 30 minutes. Re-run later; archive at $ARCHIVE"
+    [ "$attempt" -eq "$TRIES" ] && die "Still not notarized after $WAIT_MIN minutes. Apple is still processing it.
+  Resume (same upload, nothing re-sent): RESUME=1 ./release.sh $VERSION \"notes\""
     sleep 25
 done
 
