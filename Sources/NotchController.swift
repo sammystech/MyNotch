@@ -43,7 +43,7 @@ final class HitContainerView: NSView {
         // Requiring the cursor to land on the bare 185x32pt notch mid-drag is
         // why dropping "never worked" — you can't aim that precisely, and you
         // can't click to open first because a drag is already in progress.
-        if s.fileDragArmed { return band(CGSize(width: bounds.width, height: 170)) }
+        if s.fileDragArmed { return band(CGSize(width: s.openWidth, height: 170)) }
         return band(s.expanded ? s.openSize : s.collapsedHitSize)
     }
 
@@ -115,7 +115,22 @@ final class HitContainerView: NSView {
     // files back out somewhere else.
     var onDragEnter: (() -> Void)?
     var onDragExit: (() -> Void)?
-    var onDrop: (([URL]) -> Void)?
+    var onDrop: (([URL], NotchState.DropTarget) -> Void)?
+
+    // Which of the two drop boxes (AirDrop / Files Tray) is under the drag.
+    private func dropTarget(for sender: NSDraggingInfo) -> NotchState.DropTarget {
+        let p = convert(sender.draggingLocation, from: nil)
+        let top = CGPoint(x: p.x, y: bounds.height - p.y)   // SwiftUI's top-left space
+        let air = NotchState.shared.airDropRect
+        return (!air.isEmpty && air.insetBy(dx: -4, dy: -4).contains(top)) ? .airdrop : .tray
+    }
+
+    private func trackTarget(_ sender: NSDraggingInfo) {
+        let t = dropTarget(for: sender)
+        let s = NotchState.shared
+        guard s.expanded, s.dropTarget != t else { return }
+        withAnimation(NotchMotion.nudge) { s.dropTarget = t }
+    }
 
     private func urls(from sender: NSDraggingInfo) -> [URL] {
         let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
@@ -126,11 +141,14 @@ final class HitContainerView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard !urls(from: sender).isEmpty else { return [] }
         onDragEnter?()
+        trackTarget(sender)
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        urls(from: sender).isEmpty ? [] : .copy
+        guard !urls(from: sender).isEmpty else { return [] }
+        trackTarget(sender)
+        return .copy
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) { onDragExit?() }
@@ -143,7 +161,7 @@ final class HitContainerView: NSView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let found = urls(from: sender)
         guard !found.isEmpty else { return false }
-        onDrop?(found)
+        onDrop?(found, dropTarget(for: sender))
         return true
     }
 }
@@ -156,8 +174,8 @@ final class NotchController {
     private var pollTimer: Timer?
     private var lastInside = false
 
-    // Smooth, with a gentle settle — a touch slower than instant.
-    private static let anim = Animation.spring(response: 0.36, dampingFraction: 0.8)
+    // Dynamic-Island spring: smooth, with a hint of overshoot as it settles.
+    private static let anim = NotchMotion.morph
 
     init() {
         NotchState.shared.notchSize = Self.detectNotch()
@@ -193,8 +211,9 @@ final class NotchController {
         container.registerForDraggedTypes([.fileURL])
         container.onDragEnter = { [weak self] in self?.beginFileDrag() }
         container.onDragExit  = { [weak self] in self?.endFileDrag() }
-        container.onDrop = { [weak self] urls in
-            ShelfController.shared.add(urls)
+        container.onDrop = { [weak self] urls, target in
+            if target == .airdrop { ShelfController.shared.airDrop(urls) }
+            else { ShelfController.shared.add(urls) }
             self?.endFileDrag(keepOpen: true)
         }
 
@@ -274,7 +293,7 @@ final class NotchController {
     private func disarmFileDrag() {
         guard state.fileDragArmed else { return }
         state.fileDragArmed = false
-        withAnimation(Self.anim) { state.dragActive = false }
+        withAnimation(Self.anim) { state.dragActive = false; state.dropTarget = nil }
         container.refresh()
         pollCursor()
     }
@@ -385,7 +404,7 @@ final class NotchController {
             }
             if !state.expanded && !state.peeking {
                 haptic(.alignment)
-                withAnimation(Self.anim) { state.peeking = true }
+                withAnimation(NotchMotion.nudge) { state.peeking = true }
             }
         } else {
             // Don't close while the user is dragging something inside (e.g.
@@ -393,7 +412,9 @@ final class NotchController {
             if state.interacting || state.debugPinned || state.dragActive { return }
             // Close the instant the cursor leaves the black area — no grace
             // delay. (Edge flicker was fixed by the +1pt top-edge rects.)
-            withAnimation(Self.anim) {
+            // Collapse is a touch tighter than the open so it tucks away
+            // cleanly instead of wobbling back into the notch.
+            withAnimation(state.expanded ? NotchMotion.collapse : NotchMotion.nudge) {
                 if state.peeking { state.peeking = false }
                 if state.expanded {
                     state.expanded = false
@@ -415,7 +436,7 @@ final class NotchController {
     }
 
     private func endFileDrag(keepOpen: Bool = false) {
-        withAnimation(Self.anim) { state.dragActive = false }
+        withAnimation(Self.anim) { state.dragActive = false; state.dropTarget = nil }
         guard !keepOpen else { return }
         // Cursor may already be off the panel — let the normal hover rules decide.
         lastInside = true            // force the next evaluation to re-check

@@ -27,6 +27,9 @@ final class NotchState: ObservableObject {
     @Published var dragActive = false         // a file drag is hovering the notch
     @Published var shelfHasFiles = false      // shelf non-empty → hover auto-opens, panel grows
     @Published var fileDragArmed = false      // a file drag is happening ANYWHERE on screen
+    enum DropTarget { case tray, airdrop }
+    @Published var dropTarget: DropTarget?    // which drop box the dragged file is over
+    var airDropRect: CGRect = .zero           // AirDrop box, window coords (top-left origin)
     var debugPinned = false                   // MYNOTCH_PIN=1: never auto-close (testing)
     var debugFakeDrag = false                 // MYNOTCH_FAKEDRAG=1: hold the armed state (testing)
     @Published var selected: WidgetKind = .mirror
@@ -50,7 +53,13 @@ final class NotchState: ObservableObject {
     let peekGrowW: CGFloat = 16
     let peekGrowH: CGFloat = 5
 
-    var windowSize: CGSize { CGSize(width: openWidth, height: extendedHeight) }
+    // Transparent margin around the largest shape so its soft shadow (and the
+    // open panel's concave shoulders) aren't clipped by the window edge.
+    // Clicks in the margin pass through to whatever is underneath.
+    let shadowMargin: CGFloat = 44
+    var windowSize: CGSize {
+        CGSize(width: openWidth + shadowMargin * 2, height: extendedHeight + shadowMargin)
+    }
     var openSize: CGSize {
         if extended { return CGSize(width: openWidth, height: extendedHeight) }
         // Give the shelf more room the moment it's actually holding something.
@@ -105,7 +114,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let tab = env["MYNOTCH_TAB"], let kind = WidgetKind(rawValue: tab) {
                     NotchState.shared.selected = kind
                 }
-                NotchState.shared.expanded = true
+                // MYNOTCH_DROP=tray|airdrop: show the drag-over state (testing).
+                if let d = env["MYNOTCH_DROP"] {
+                    NotchState.shared.dragActive = true
+                    NotchState.shared.dropTarget = d == "airdrop" ? .airdrop : .tray
+                }
+                // Animated, so the debug hook also exercises the real morph.
+                withAnimation(NotchMotion.morph) { NotchState.shared.expanded = true }
             }
         }
     }

@@ -130,7 +130,12 @@ final class MusicController: ObservableObject {
     static let shared = MusicController()       // AppKit (notch clicks) reaches it too
 
     @Published var now: NowPlaying?
-    @Published var artwork: NSImage?
+    @Published var artwork: NSImage? {
+        // Sampled once per cover (a 12×12 downsample) — tints the EQ bars
+        // and the panel glow to the album, like the iPhone's island.
+        didSet { if artwork !== oldValue { accent = artwork?.accentColor() ?? .white } }
+    }
+    @Published private(set) var accent: Color = .white
     @Published var scrubbing: Double?           // 0…1 while dragging the bar
     private var timer: Timer?
     private var artworkKey = ""
@@ -478,32 +483,48 @@ struct ArtworkView: View {
     let image: NSImage?
     var body: some View {
         if let image {
-            Image(nsImage: image).resizable().scaledToFill()
+            Image(nsImage: image).resizable().interpolation(.high).scaledToFill()
         } else {
             ZStack {
-                LinearGradient(colors: [Color(white: 0.22), Color(white: 0.10)],
+                LinearGradient(colors: [Color(white: 0.2), Color(white: 0.07)],
                                startPoint: .topLeading, endPoint: .bottomTrailing)
                 Image(systemName: "music.note")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.55))
+                    .foregroundColor(.white.opacity(0.5))
             }
         }
     }
 }
 
+/// The player's own app icon + name ("Music", "Spotify"), cached per app.
+private enum SourceBadge {
+    private static var cache: [String: NSImage] = [:]
+    static func icon(for app: String) -> NSImage? {
+        if let hit = cache[app] { return hit }
+        guard let id = players.first(where: { $0.name == app })?.bundleID,
+              let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return nil }
+        let img = NSWorkspace.shared.icon(forFile: url.path)
+        cache[app] = img
+        return img
+    }
+    static func label(for app: String) -> String { app == "Music" ? "Apple Music" : app }
+}
+
 // Animated equalizer bars — TimelineView-driven, no @State needed.
 // Movement is layered to feel like real audio: a beat "thump" sweeping across
-// the bars, a slower groove, and fast shimmer, with a mid-heavy spectrum shape
-// — instead of the old uniform sine wobble.
+// the bars, a slower groove, and fast shimmer, with a mid-heavy spectrum
+// shape. Tinted to the album, like the iPhone island.
 struct EQBars: View {
     var playing: Bool
     var tint: Color = .white
     var barCount: Int = 5
+    var maxHeight: CGFloat = 15
+    var barWidth: CGFloat = 2.4
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: !playing)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !playing)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 2.2) {
+            HStack(spacing: barWidth * 0.9) {
                 ForEach(0..<barCount, id: \.self) { i in
                     let p = Double(i) * 1.37
                     // Beat pulse (~100 bpm) that ripples bar-to-bar…
@@ -515,13 +536,15 @@ struct EQBars: View {
                     let shape = 1.0 - Double(abs(i - barCount / 2)) * 0.16
                     let level = playing
                         ? (0.14 + (0.55 * beat + 0.24 * groove + 0.12 * shimmer) * shape)
-                        : 0.10
+                        : 0.1
                     Capsule()
-                        .fill(tint.opacity(playing ? 0.95 : 0.5))
-                        .frame(width: 2.4, height: 3 + 12 * min(1, level))
+                        .fill(LinearGradient(colors: [tint, tint.opacity(0.72)],
+                                             startPoint: .top, endPoint: .bottom))
+                        .opacity(playing ? 1 : 0.45)
+                        .frame(width: barWidth, height: maxHeight * 0.2 + maxHeight * 0.8 * CGFloat(min(1, level)))
                 }
             }
-            .frame(height: 15, alignment: .center)
+            .frame(height: maxHeight, alignment: .center)
         }
     }
 }
@@ -535,6 +558,7 @@ struct MusicIslandContent: View {
 
     var body: some View {
         let playing = controller.now?.isPlaying ?? false
+        let art = RoundedRectangle(cornerRadius: 6.5, style: .continuous)
         HStack(spacing: 0) {
             // Album art doubles as a play/pause button — the control appears
             // only when the cursor is actually ON the art (state.hoveringArt),
@@ -542,20 +566,21 @@ struct MusicIslandContent: View {
             ZStack {
                 ArtworkView(image: controller.artwork)
                     .frame(width: 22, height: 22)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .clipShape(art)
+                    .overlay(art.strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5))
                 if state.hoveringArt {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.black.opacity(0.55))
-                        .frame(width: 22, height: 22)
+                    art.fill(Color.black.opacity(0.55)).frame(width: 22, height: 22)
                     Image(systemName: playing ? "pause.fill" : "play.fill")
                         .font(.system(size: 10, weight: .heavy))
                         .foregroundColor(.white)
                         .transition(.opacity)
                 }
             }
+            .scaleEffect(playing ? 1 : 0.9)
+            .animation(NotchMotion.nudge, value: playing)
             .padding(.leading, 7)
             Spacer(minLength: notchGap)
-            EQBars(playing: playing)
+            EQBars(playing: playing, tint: controller.accent)
                 .padding(.trailing, 8)
         }
     }
@@ -563,8 +588,10 @@ struct MusicIslandContent: View {
 
 // MARK: - Expanded music panel (spinning record + track info + controls)
 
-// Album-art disk with vinyl grooves. Isolated view so the 60 Hz rotation only
-// re-renders the record, not the whole panel.
+// A record pressed from the album art: cover printed across the disc, fine
+// grooves, a spindle label, and a still light-sheen on top. The sheen stays
+// fixed while the disc turns under it — that's what makes it read as a real
+// spinning record. Isolated view so the 60 Hz rotation only re-renders this.
 struct VinylView: View {
     @ObservedObject var turntable: Turntable
     @ObservedObject var controller: MusicController
@@ -575,16 +602,46 @@ struct VinylView: View {
         GeometryReader { geo in
             let cx = geo.size.width / 2, cy = geo.size.height / 2
             ZStack {
-                ArtworkView(image: image)
+                ZStack {
+                    ArtworkView(image: image)
+                    // Grooves ride along with the disc.
+                    ForEach(0..<9, id: \.self) { i in
+                        let d = size * (0.5 + CGFloat(i) * 0.058)
+                        Circle()
+                            .stroke(Color.black.opacity(i % 3 == 0 ? 0.3 : 0.16), lineWidth: 0.6)
+                            .frame(width: d, height: d)
+                    }
+                }
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+                .rotationEffect(.degrees(turntable.angle))
+
+                // Fixed light: two soft glints across the vinyl.
+                Circle()
+                    .fill(AngularGradient(
+                        stops: [
+                            .init(color: .white.opacity(0), location: 0.0),
+                            .init(color: .white.opacity(0.16), location: 0.1),
+                            .init(color: .white.opacity(0), location: 0.22),
+                            .init(color: .white.opacity(0), location: 0.5),
+                            .init(color: .white.opacity(0.1), location: 0.6),
+                            .init(color: .white.opacity(0), location: 0.72),
+                            .init(color: .white.opacity(0), location: 1.0),
+                        ],
+                        center: .center))
                     .frame(width: size, height: size)
-                    .clipShape(Circle())
-                    .rotationEffect(.degrees(turntable.angle))
-                Circle().stroke(Color.white.opacity(0.12), lineWidth: 1).frame(width: 124, height: 124)
-                Circle().stroke(Color.black.opacity(0.45), lineWidth: 1).frame(width: 96, height: 96)
-                Circle().stroke(Color.black.opacity(0.5), lineWidth: 5).frame(width: 60, height: 60)
-                Circle().fill(Color.black).frame(width: 24, height: 24)
-                Circle().stroke(Color.white.opacity(0.28), lineWidth: 1).frame(width: 24, height: 24)
-                Circle().fill(Color.white.opacity(0.35)).frame(width: 4.5, height: 4.5)
+                    .allowsHitTesting(false)
+
+                // Rim: bright top edge, like the glass controls.
+                Circle()
+                    .strokeBorder(LinearGradient(colors: [.white.opacity(0.3), .white.opacity(0.06)],
+                                                 startPoint: .top, endPoint: .bottom), lineWidth: 1)
+                    .frame(width: size, height: size)
+                // Spindle label + hole.
+                Circle().fill(Color.black.opacity(0.5)).frame(width: 28, height: 28)
+                Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.7).frame(width: 28, height: 28)
+                Circle().fill(Color.black).frame(width: 9, height: 9)
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 0.6))
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .contentShape(Circle())
@@ -611,7 +668,7 @@ struct VinylView: View {
             )
         }
         .frame(width: size, height: size)
-        .shadow(color: .black.opacity(0.65), radius: 12, x: 0, y: 6)
+        .shadow(color: .black.opacity(0.7), radius: 14, x: 0, y: 8)
     }
 }
 
@@ -621,72 +678,118 @@ struct MusicPanel: View {
 
     var body: some View {
         ZStack {
-            if let art = controller.artwork {
-                GeometryReader { geo in
-                    Image(nsImage: art)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
-                        .opacity(0.16)
-                }
-                LinearGradient(colors: [.black.opacity(0.5), .black.opacity(0.88)],
-                               startPoint: .top, endPoint: .bottom)
-            }
-
+            backdrop
             if let np = controller.now {
                 HStack(spacing: 18) {
                     VinylView(turntable: turntable, controller: controller, image: controller.artwork)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(np.title)
-                            .font(.system(size: 13.5, weight: .semibold))
-                            .lineLimit(2)
+                    VStack(alignment: .leading, spacing: 0) {
+                        source(np)
+                            .padding(.bottom, 6)
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(np.title)
+                                .font(.system(size: 14, weight: .semibold))
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            EQBars(playing: np.isPlaying, tint: controller.accent,
+                                   barCount: 4, maxHeight: 11, barWidth: 2)
+                                .opacity(np.isPlaying ? 1 : 0)
+                                .animation(.easeInOut(duration: 0.25), value: np.isPlaying)
+                        }
                         Text(np.artist.isEmpty ? np.album : np.artist)
-                            .font(.system(size: 11))
+                            .font(.system(size: 11.5))
                             .foregroundColor(.white.opacity(0.55))
                             .lineLimit(1)
-                        Spacer(minLength: 2)
+                            .padding(.top, 2)
+                        Spacer(minLength: 4)
                         progress(np)
                         controls(np)
+                            .padding(.top, 4)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 14)
+                    .padding(.vertical, 12)
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 14)
             } else {
-                VStack(spacing: 6) {
+                VStack(spacing: 10) {
                     Image(systemName: "music.note")
-                        .font(.system(size: 22))
-                        .foregroundColor(.white.opacity(0.3))
-                    Text("Nothing playing")
-                        .font(.system(size: 12))
-                        .foregroundColor(.white.opacity(0.5))
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 42, height: 42)
+                        .darkGlass(Circle(), intensity: 0.8)
+                    Text("Not Playing")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.75))
+                    GlassPillButton(title: "Open Music", symbol: "play.fill") {
+                        if let u = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Music") {
+                            NSWorkspace.shared.openApplication(at: u, configuration: .init())
+                        }
+                    }
                 }
             }
         }
         .background(Color.black)
     }
 
-    // Draggable / scrubbable progress bar with a grab knob.
+    // Faint cover wash + an album-coloured glow behind the record — the
+    // panel takes on the song's colour without ever getting light.
+    @ViewBuilder private var backdrop: some View {
+        if let art = controller.artwork {
+            GeometryReader { geo in
+                ZStack {
+                    Image(nsImage: art)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .opacity(0.16)
+                        // Feathered, so the wash has no card edge — it just
+                        // glows out of the black behind the record.
+                        .mask(RadialGradient(colors: [.white, .white.opacity(0.4), .clear],
+                                             center: UnitPoint(x: 0.25, y: 0.5),
+                                             startRadius: 20, endRadius: geo.size.width * 0.62))
+                    RadialGradient(colors: [controller.accent.opacity(0.22), .clear],
+                                   center: UnitPoint(x: 0.22, y: 0.5),
+                                   startRadius: 10, endRadius: geo.size.width * 0.55)
+                    LinearGradient(colors: [.black.opacity(0.2), .black.opacity(0.7)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private func source(_ np: NowPlaying) -> some View {
+        HStack(spacing: 4) {
+            if let icon = SourceBadge.icon(for: np.app) {
+                Image(nsImage: icon).resizable().frame(width: 11, height: 11)
+            }
+            Text(SourceBadge.label(for: np.app).uppercased())
+                .font(.system(size: 8.5, weight: .semibold))
+                .tracking(0.6)
+                .foregroundColor(.white.opacity(0.4))
+        }
+    }
+
+    // iOS-style scrubber: a slim bar that swells while you hold it. No knob.
     private func progress(_ np: NowPlaying) -> some View {
         TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
             let livePos = np.position(at: ctx.date)
+            let active = controller.scrubbing != nil
             let frac: Double = controller.scrubbing
                 ?? (np.duration > 0 ? min(1, livePos / np.duration) : 0)
             let shownPos = np.duration > 0 ? frac * np.duration : livePos
-            VStack(spacing: 4) {
+            VStack(spacing: 3) {
                 GeometryReader { geo in
                     let w = geo.size.width
+                    let h: CGFloat = active ? 8 : 5
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.15)).frame(height: 4)
-                        Capsule().fill(Color.white.opacity(0.9))
-                            .frame(width: max(4, w * CGFloat(frac)), height: 4)
-                        Circle().fill(Color.white)
-                            .frame(width: controller.scrubbing != nil ? 12 : 9)
-                            .shadow(color: .black.opacity(0.4), radius: 2)
-                            .offset(x: min(w, max(0, w * CGFloat(frac))) - (controller.scrubbing != nil ? 6 : 4.5))
+                        Capsule().fill(Color.white.opacity(active ? 0.24 : 0.17))
+                        Capsule().fill(Color.white.opacity(active ? 1 : 0.85))
+                            .frame(width: max(h, w * CGFloat(frac)))
                     }
+                    .frame(height: h)
                     .frame(height: geo.size.height, alignment: .center)
+                    .animation(NotchMotion.nudge, value: active)
                     .contentShape(Rectangle())
                     .gesture(
                         DragGesture(minimumDistance: 0)
@@ -702,47 +805,47 @@ struct MusicPanel: View {
                             }
                     )
                 }
-                .frame(height: 16)
+                .frame(height: 14)
                 HStack {
                     Text(np.duration > 0 ? Self.mmss(shownPos) : "")
                     Spacer()
                     Text(np.duration > 0 ? "-" + Self.mmss(max(0, np.duration - shownPos)) : "")
                 }
-                .font(.system(size: 9, weight: .medium).monospacedDigit())
-                .foregroundColor(.white.opacity(0.45))
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                .foregroundColor(.white.opacity(active ? 0.8 : 0.42))
             }
         }
-        .frame(height: 30)
+        .frame(height: 28)
     }
 
     private func controls(_ np: NowPlaying) -> some View {
-        HStack(spacing: 22) {
+        HStack(spacing: 18) {
             ctrl("backward.fill", size: 12) { controller.previous() }
             Button { controller.playPause() } label: {
                 Image(systemName: np.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 16, weight: .bold))
+                    .contentTransition(.symbolEffect(.replace))
                     .foregroundColor(.white)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 40, height: 40)
                     .darkGlass(Circle(), intensity: 1.15)
                     .contentShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressStyle())
             ctrl("forward.fill", size: 12) { controller.next() }
         }
         .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.trailing, 6)
     }
 
     private func ctrl(_ symbol: String, size: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .bold))
-                .foregroundColor(.white.opacity(0.85))
-                .frame(width: 28, height: 28)
+                .foregroundColor(.white.opacity(0.88))
+                .frame(width: 30, height: 30)
                 .darkGlass(Circle(), intensity: 0.6)
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressStyle())
     }
 
     private static func mmss(_ t: Double) -> String {

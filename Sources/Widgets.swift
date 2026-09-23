@@ -21,7 +21,7 @@ enum WidgetKind: String, CaseIterable, Identifiable {
         case .calendar: return "Calendar"
         case .mirror:   return "Mirror"
         case .music:    return "Music"
-        case .shelf:    return "Shelf"
+        case .shelf:    return "Tray"
         case .settings: return "Settings"
         }
     }
@@ -32,6 +32,17 @@ enum WidgetKind: String, CaseIterable, Identifiable {
         case .mirror:   return "camera"
         case .music:    return "music.note"
         case .shelf:    return "tray.full"
+        case .settings: return "gearshape.fill"
+        }
+    }
+
+    /// Filled variant for the selected tab, the way Apple tab bars do it.
+    var activeSymbol: String {
+        switch self {
+        case .calendar: return "calendar"
+        case .mirror:   return "camera.fill"
+        case .music:    return "music.note"
+        case .shelf:    return "tray.full.fill"
         case .settings: return "gearshape.fill"
         }
     }

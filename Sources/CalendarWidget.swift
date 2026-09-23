@@ -5,13 +5,15 @@ final class CalendarController: ObservableObject {
     private let store = EKEventStore()
     @Published var events: [EKEvent] = []
     @Published var status: String = "Loading…"
+    @Published var denied = false
 
     func requestAndLoad() {
         store.requestFullAccessToEvents { [weak self] granted, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.denied = !granted
                 if granted { self.load() }
-                else { self.status = "Enable calendar in System Settings ▸ Privacy" }
+                else { self.status = "Calendar access is off" }
             }
         }
     }
@@ -35,41 +37,114 @@ final class CalendarController: ObservableObject {
             DispatchQueue.main.async {
                 self.events = found
                 self.status = found.isEmpty ? "No events today" : ""
+                self.denied = false
             }
         }
     }
 }
 
+// Apple's Calendar widget, in the dark: red weekday, big date and a week
+// strip on the left; today's agenda on the right.
 struct CalendarPanel: View {
     @ObservedObject var controller: CalendarController
+    private let red = Color(red: 1, green: 0.27, blue: 0.23)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(Date(), format: .dateTime.weekday(.wide).month().day())
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.9))
-                Spacer()
-                Button { controller.load() } label: {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 10.5))
+        HStack(alignment: .top, spacing: 12) {
+            dateColumn
+                .frame(width: 112, alignment: .leading)
+            Rectangle().fill(Color.white.opacity(0.08)).frame(width: 0.5)
+                .padding(.vertical, 6)
+            agenda
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.black)
+    }
+
+    private var dateColumn: some View {
+        let now = Date()
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(now.formatted(.dateTime.weekday(.wide)).uppercased())
+                .font(.system(size: 10, weight: .bold))
+                .tracking(0.4)
+                .foregroundColor(red)
+            Text(now.formatted(.dateTime.day()))
+                .font(.system(size: 40, weight: .regular))
+                .padding(.top, -2)
+            Text(now.formatted(.dateTime.month(.wide).year()))
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundColor(.white.opacity(0.45))
+            Spacer(minLength: 6)
+            weekStrip(now)
+        }
+    }
+
+    private func weekStrip(_ today: Date) -> some View {
+        let cal = Calendar.current
+        let start = cal.dateInterval(of: .weekOfYear, for: today)?.start ?? today
+        let days = (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
+        return HStack(spacing: 0) {
+            ForEach(days, id: \.self) { d in
+                let isToday = cal.isDate(d, inSameDayAs: today)
+                VStack(spacing: 3) {
+                    Text(d.formatted(.dateTime.weekday(.narrow)))
+                        .font(.system(size: 7.5, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.35))
+                    Text(d.formatted(.dateTime.day()))
+                        .font(.system(size: 9, weight: isToday ? .bold : .medium).monospacedDigit())
+                        .foregroundColor(isToday ? .white : .white.opacity(0.7))
+                        .frame(width: 15, height: 15)
+                        .background(Circle().fill(isToday ? red : .clear))
                 }
-                .buttonStyle(.plain)
-                .foregroundColor(.white.opacity(0.35))
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 14).padding(.vertical, 9)
+        }
+    }
 
-            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
-
-            if controller.events.isEmpty {
-                Spacer()
-                Text(controller.status)
-                    .font(.system(size: 12))
+    @ViewBuilder private var agenda: some View {
+        if controller.events.isEmpty {
+            VStack(spacing: 9) {
+                Image(systemName: controller.denied ? "calendar.badge.exclamationmark" : "checkmark.circle")
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(.white.opacity(0.6))
-                    .frame(maxWidth: .infinity)
-                Spacer()
-            } else {
-                ScrollView {
-                    VStack(spacing: 2) {
+                    .frame(width: 38, height: 38)
+                    .darkGlass(Circle(), intensity: 0.7)
+                Text(controller.denied ? "Calendar access is off" : "No events today")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.7))
+                if controller.denied {
+                    GlassPillButton(title: "Open Settings", symbol: "gearshape.fill") {
+                        if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                            NSWorkspace.shared.open(u)
+                        }
+                    }
+                } else {
+                    Text("Enjoy the free time")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.35))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("TODAY")
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .tracking(0.6)
+                        .foregroundColor(.white.opacity(0.4))
+                    Spacer()
+                    Button { controller.load() } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.white.opacity(0.35))
+                            .frame(width: 18, height: 14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressStyle())
+                }
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 5) {
                         // id: \.self (EKEvent is a class, so this is identity).
                         // eventIdentifier can be nil AND duplicates across
                         // same-day recurrences, which made SwiftUI drop rows.
@@ -77,33 +152,52 @@ struct CalendarPanel: View {
                             EventRow(event: ev)
                         }
                     }
-                    .padding(.vertical, 6)
+                    .padding(.bottom, 4)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .background(Color.black)
     }
 }
 
 private struct EventRow: View {
     let event: EKEvent
+
     var body: some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 2)
-                // `calendar` is another EventKit IUO that can be nil.
-                .fill(Color(event.calendar?.cgColor ?? CGColor(gray: 0.6, alpha: 1)))
-                .frame(width: 3, height: 30)
-            VStack(alignment: .leading, spacing: 2) {
+        let now = Date()
+        let start = event.startDate as Date?, end = event.endDate as Date?
+        let isNow = !event.isAllDay && (start.map { $0 <= now } ?? false) && (end.map { $0 > now } ?? false)
+        let isPast = !event.isAllDay && (end.map { $0 <= now } ?? false)
+        // `calendar` is another EventKit IUO that can be nil.
+        let color = Color(event.calendar?.cgColor ?? CGColor(gray: 0.6, alpha: 1))
+
+        return HStack(spacing: 8) {
+            Capsule().fill(color).frame(width: 3)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(event.title ?? "(no title)")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11.5, weight: .semibold))
                     .lineLimit(1)
-                Text(timeText)
-                    .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.55))
+                HStack(spacing: 4) {
+                    if isNow {
+                        Text("NOW")
+                            .font(.system(size: 7.5, weight: .heavy))
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Capsule().fill(color))
+                    }
+                    Text(timeText)
+                        .font(.system(size: 9.5).monospacedDigit())
+                        .foregroundColor(.white.opacity(0.5))
+                }
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14).padding(.vertical, 6)
+        .padding(.vertical, 5).padding(.leading, 5).padding(.trailing, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(color.opacity(isNow ? 0.2 : 0.1))
+        )
+        .opacity(isPast ? 0.45 : 1)
     }
 
     private var timeText: String {

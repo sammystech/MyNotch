@@ -121,32 +121,51 @@ struct CameraPreview: NSViewRepresentable {
 struct MirrorPanel: View {
     @ObservedObject var controller: CameraController
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         ZStack {
+            // Shows for the instant before the first frame arrives.
+            if controller.status.isEmpty {
+                Image(systemName: "camera.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(.white.opacity(0.12))
+            }
             CameraPreview(session: controller.session)
-                .background(Color.black)
+            // Soft vignette + glass rim so the feed sits IN the panel like a
+            // lens rather than a flat rectangle.
+            RadialGradient(colors: [.clear, .black.opacity(0.35)],
+                           center: .center, startRadius: 80, endRadius: 240)
+                .allowsHitTesting(false)
+            shape.strokeBorder(
+                LinearGradient(colors: [.white.opacity(0.22), .white.opacity(0.04)],
+                               startPoint: .top, endPoint: .bottom),
+                lineWidth: 0.8)
+                .allowsHitTesting(false)
             if !controller.status.isEmpty {
-                VStack(spacing: 10) {
+                Color.black.opacity(0.7)
+                VStack(spacing: 9) {
+                    Image(systemName: controller.accessDenied ? "video.slash.fill" : "camera.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 38, height: 38)
+                        .darkGlass(Circle(), intensity: 0.7)
                     Text(controller.status)
-                        .font(.system(size: 12))
+                        .font(.system(size: 11.5, weight: .semibold))
                         .foregroundColor(.white.opacity(0.7))
                         .multilineTextAlignment(.center)
                     if controller.accessDenied {
                         // Denied is only fixable in System Settings — take them there.
-                        Button("Open Settings") {
+                        GlassPillButton(title: "Open Settings", symbol: "gearshape.fill") {
                             if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
                                 NSWorkspace.shared.open(u)
                             }
                         }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Capsule().fill(Color.white.opacity(0.16)))
                     }
                 }
                 .padding()
             }
         }
+        .background(Color.black)
+        .clipShape(shape)
         // NOTE: no onAppear/onDisappear start/stop here. NotchRootView's
         // onChange handlers are the single driver — a MirrorPanel mid-removal
         // transition would otherwise fire a late onDisappear→stop() that kills
