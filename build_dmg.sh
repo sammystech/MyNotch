@@ -18,6 +18,8 @@ STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 
+# LOCAL builds only (self-signed, not notarized). Public releases come from
+# ./release.sh, which signs with Developer ID and notarizes.
 # Include a short read-me for recipients (Gatekeeper bypass).
 cat > "$STAGE/READ ME FIRST.txt" <<'TXT'
 My Notch — install

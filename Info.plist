@@ -25,11 +25,11 @@
 	<key>NSAppleEventsUsageDescription</key>
 	<string>MyNotch reads Music and Spotify to show what's playing in the notch.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>NotchNook shows today's events in the notch.</string>
+	<string>My Notch shows today's events in the notch.</string>
 	<key>NSCalendarsUsageDescription</key>
-	<string>NotchNook shows today's events in the notch.</string>
+	<string>My Notch shows today's events in the notch.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>NotchNook shows a live mirror of your camera in the notch.</string>
+	<string>My Notch shows a live mirror of your camera in the notch.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

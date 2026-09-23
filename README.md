@@ -21,17 +21,9 @@ little dashboard. Hover it and it grows slightly; click and it opens.
 
 1. Download **MyNotch.dmg** from [Releases](../../releases/latest).
 2. Drag MyNotch to Applications.
-3. **Right-click it in Applications → Open → Open.** You only do this once —
-   the app is signed, but not notarized (that needs a paid Apple Developer
-   account), so macOS asks for confirmation on the first launch. A normal
-   double-click will be refused.
+3. Open it. It's signed with a Developer ID and notarized by Apple, so it
+   opens like any other app — no right-click or "Open Anyway" needed.
 4. Approve the Camera, Calendar, and "control Music" prompts as you use each tab.
-
-If macOS ever calls the download damaged, clear the quarantine flag:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/MyNotch.app
-```
 
 ## Using it
 
