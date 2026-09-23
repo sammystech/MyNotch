@@ -456,6 +456,63 @@ final class NotchController {
         }
     }
 
+    /// MYNOTCH_CLICKAT="x,y;x,y" (window points, top-left origin): clicks those
+    /// spots from inside the app, 1s apart, starting 2.5s after launch.
+    /// Synthetic CGEvent clicks from an unprivileged tool are silently dropped
+    /// by macOS (mouse-down never reaches the window), so UI tests go this way.
+    func runDebugClicks(_ spec: String) {
+        // "jog:cx,cy,r" = one slow clockwise lap dragged around (cx,cy).
+        if spec.hasPrefix("jog:") {
+            let v = spec.dropFirst(4).split(separator: ",").compactMap { Double($0) }
+            guard v.count == 3 else { return }
+            let (cx, cy, r) = (v[0], v[1], v[2])
+            func send(_ type: NSEvent.EventType, _ deg: Double) {
+                let a = deg * .pi / 180
+                let loc = NSPoint(x: cx + r * cos(a), y: panel.frame.height - (cy + r * sin(a)))
+                if let e = NSEvent.mouseEvent(with: type, location: loc, modifierFlags: [],
+                                              timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: panel.windowNumber, context: nil,
+                                              eventNumber: 0, clickCount: 1, pressure: 1) {
+                    panel.sendEvent(e)
+                }
+            }
+            let steps = 60
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { send(.leftMouseDown, 0) }
+            for k in 1...steps {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3 + Double(k) * 0.025) {
+                    send(.leftMouseDragged, Double(k) * 6)
+                    if k == steps / 2 {
+                        FileHandle.standardError.write("DEBUGJOG mid jogging=\(MusicController.shared.jogging)\n".data(using: .utf8)!)
+                    }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3 + Double(steps + 1) * 0.025) {
+                send(.leftMouseUp, 360)
+                FileHandle.standardError.write("DEBUGJOG released\n".data(using: .utf8)!)
+            }
+            return
+        }
+        let pts = spec.split(separator: ";").compactMap { pair -> CGPoint? in
+            let v = pair.split(separator: ",").compactMap { Double($0) }
+            return v.count == 2 ? CGPoint(x: v[0], y: v[1]) : nil
+        }
+        for (i, p) in pts.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5 + Double(i)) { [weak self] in
+                guard let self else { return }
+                let loc = NSPoint(x: p.x, y: self.panel.frame.height - p.y)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let e = NSEvent.mouseEvent(with: type, location: loc, modifierFlags: [],
+                                                  timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: self.panel.windowNumber, context: nil,
+                                                  eventNumber: 0, clickCount: 1, pressure: 1) {
+                        self.panel.sendEvent(e)
+                    }
+                }
+                FileHandle.standardError.write("DEBUGCLICK \(p) -> selected=\(self.state.selected)\n".data(using: .utf8)!)
+            }
+        }
+    }
+
     private func targetScreen() -> NSScreen? {
         NSScreen.main ?? NSScreen.screens.first
     }

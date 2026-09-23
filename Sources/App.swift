@@ -95,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)   // no Dock icon
         controller = NotchController()
         controller.show()
+        if let spec = ProcessInfo.processInfo.environment["MYNOTCH_CLICKAT"] { controller.runDebugClicks(spec) }
         setupStatusItem()
         // SMAppService register/status are synchronous XPC round trips to the
         // launch-services daemon — slow right after a reboot, which is exactly

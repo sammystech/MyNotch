@@ -10,6 +10,10 @@
 #
 #   RESUME=1 ./release.sh 1.4.0 "notes"
 #
+# Build + notarize + package WITHOUT publishing (to test the real signed build
+# locally first): NO_PUBLISH=1 ./release.sh 1.4.0. Publish it afterwards with
+# RESUME=1 ./release.sh 1.4.0 "notes".
+#
 # Requirements:
 #   * Xcode signed in to team CH6CSBA54G (Settings → Accounts), with its
 #     "Developer ID Application" certificate in the login keychain.
@@ -124,6 +128,13 @@ rm -rf "$STAGE"
 # own stapled notarization ticket, which is what Gatekeeper checks.
 codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG" || die "Couldn't sign the DMG."
 ls -lh "$DMG"
+
+if [ "${NO_PUBLISH:-}" = 1 ]; then
+    echo "✓ Built, notarized and packaged $VERSION — NOT published (NO_PUBLISH=1)."
+    echo "  Test it: rm -rf /Applications/MyNotch.app && cp -R \"$APP\" /Applications/"
+    echo "  Publish: RESUME=1 ./release.sh $VERSION \"notes\""
+    exit 0
+fi
 
 say "Committing + tagging…"
 git add -A

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ImageIO
 
 // MARK: - Now-playing source
 //
@@ -47,22 +48,49 @@ struct NowPlaying: Equatable {
 // UP smoothly when playback starts and coasts DOWN to a stop when it pauses —
 // no abrupt freeze. Runs a 60 Hz timer only while it's actually turning.
 final class Turntable: ObservableObject {
-    @Published private(set) var angle: Double = 0
+    // NOT @Published: publishing at 60Hz made SwiftUI re-render the whole
+    // record every frame (~20% CPU). The angle goes straight to a Core
+    // Animation layer through `onAngle` instead — SwiftUI never sees it.
+    private(set) var angle: Double = 0 { didSet { onAngle?(angle) } }
+    var onAngle: ((Double) -> Void)?
+    // Cruise: once at full speed, Core Animation spins the disc on its own
+    // (a looping layer rotation) and the 60Hz timer stops entirely. The timer
+    // only runs for spin-up, spin-down and jogging, where physics matters.
+    var onCruise: ((Double, Double) -> Void)?     // (from angle, deg/sec)
+    var cruiseAngle: (() -> Double?)?             // where the layer is right now
+    private var cruising = false
+
+    /// A fresh disc view attached mid-cruise: start its layer spinning too.
+    func reattach() { if cruising { onCruise?(angle, targetSpeed) } }
+
+    /// Leave cruise and resume frame-by-frame physics from where the disc is.
+    private func leaveCruise() {
+        guard cruising else { return }
+        cruising = false
+        angle = cruiseAngle?() ?? angle      // setting angle also cancels the layer spin
+        velocity = targetSpeed
+    }
     private var velocity: Double = 0            // deg/sec
     private let targetSpeed: Double = 46        // ~7.7 rpm, a calm spin
     private var timer: Timer?
     private var last = Date()
 
     var playing: Bool = false {
-        didSet { if playing != oldValue { ensureRunning() } }
+        didSet {
+            guard playing != oldValue else { return }
+            if !playing { leaveCruise() }
+            ensureRunning()
+        }
     }
 
     private func ensureRunning() {
-        guard timer == nil else { return }
+        guard timer == nil, !cruising else { return }
         last = Date()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            self?.tick()
-        }
+        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.tick() }
+        // .common, not the default mode: the default mode pauses while the
+        // mouse is held down (event tracking), which made the record hitch.
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     func stop() { timer?.invalidate(); timer = nil }
@@ -76,6 +104,7 @@ final class Turntable: ObservableObject {
     var jogTotal: Double { jogAccum }
 
     func beginJog(cursorAngle: Double) {
+        leaveCruise()
         stop()                       // hand control of the angle to the user
         jogLastCursor = cursorAngle
         jogStartAngle = angle
@@ -122,6 +151,12 @@ final class Turntable: ObservableObject {
         if !playing && abs(velocity) < 0.3 {   // fully coasted to a stop
             velocity = 0
             stop()
+        } else if playing && abs(velocity - targetSpeed) < 0.4, onCruise != nil {
+            // Up to speed: hand the spin to Core Animation and go idle.
+            velocity = targetSpeed
+            stop()
+            cruising = true
+            onCruise?(angle, targetSpeed)
         }
     }
 }
@@ -144,6 +179,7 @@ final class MusicController: ObservableObject {
     private let pauseGrace: TimeInterval = 6     // keep the island this long after pausing
 
     init() {
+        trackRunningPlayers()
         poll()
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             self?.poll()
@@ -151,9 +187,36 @@ final class MusicController: ObservableObject {
     }
 
     // Only script apps that are actually running (so we never launch them).
+    // `NSRunningApplication.bundleIdentifier` is a synchronous LaunchServices
+    // XPC round trip per app — doing that for every running app on the main
+    // thread every 1.5s showed up in samples and could stall the UI. Instead
+    // keep a set of running player IDs, updated by launch/quit notifications.
+    private var runningPlayerIDs = Set<String>()
+    private var workspaceObservers: [NSObjectProtocol] = []
+
+    private func trackRunningPlayers() {
+        let wanted = Set(players.map(\.bundleID))
+        let nc = NSWorkspace.shared.notificationCenter
+        func app(_ n: Notification) -> String? {
+            (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+        }
+        workspaceObservers = [
+            nc.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] n in
+                if let id = app(n), wanted.contains(id) { self?.runningPlayerIDs.insert(id) }
+            },
+            nc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+                if let id = app(n), wanted.contains(id) { self?.runningPlayerIDs.remove(id) }
+            },
+        ]
+        // Seed it once, off the main thread (this is the slow part).
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let ids = Set(wanted.filter { !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty })
+            DispatchQueue.main.async { self?.runningPlayerIDs.formUnion(ids) }
+        }
+    }
+
     private func runningPlayer() -> Player? {
-        let ids = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleIdentifier })
-        return players.first { ids.contains($0.bundleID) }
+        players.first { runningPlayerIDs.contains($0.bundleID) }
     }
 
     func command(_ verb: String) {
@@ -372,7 +435,7 @@ final class MusicController: ObservableObject {
                 guard let self else { return }
                 let bytes = desc?.data.count ?? -1
                 var img: NSImage?
-                if let data = desc?.data { img = NSImage(data: data) }
+                if let data = desc?.data { img = Self.decodeArtwork(data) }
                 Self.mlog("rawdata bytes=\(bytes) image=\(img != nil)")
                 if let img {
                     DispatchQueue.main.async { if self.artworkKey == key { self.artwork = img } }
@@ -402,12 +465,28 @@ final class MusicController: ObservableObject {
         var req = URLRequest(url: url)
         req.timeoutInterval = 8
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            guard let self, let data, let img = NSImage(data: data) else { done?(false); return }
+            guard let self, let data, let img = Self.decodeArtwork(data) else { done?(false); return }
             DispatchQueue.main.async {
                 if self.artworkKey == key { self.artwork = img }
             }
             done?(true)
         }.resume()
+    }
+
+    /// Decode + downscale cover art OFF the main thread. Apple Music hands
+    /// back the original upload (often 3000px+); drawing that full-size into a
+    /// record spinning at 60fps and a blurred backdrop was the heavy part of
+    /// the Music tab. 600px is plenty for a 124pt disc on Retina.
+    private static func decodeArtwork(_ data: Data) -> NSImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 600,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 
     private func fetchITunesArtwork(_ np: NowPlaying, key: String) {
@@ -510,10 +589,12 @@ private enum SourceBadge {
     static func label(for app: String) -> String { app == "Music" ? "Apple Music" : app }
 }
 
-// Animated equalizer bars — TimelineView-driven, no @State needed.
-// Movement is layered to feel like real audio: a beat "thump" sweeping across
-// the bars, a slower groove, and fast shimmer, with a mid-heavy spectrum
-// shape. Tinted to the album, like the iPhone island.
+// Animated equalizer bars, run entirely by Core Animation: each bar gets a
+// looping keyframe curve baked from the same layered motion as before (a beat
+// "thump" rippling across the bars, a slower groove, a fast shimmer, mid bars
+// running hotter). The render server plays them — zero per-frame work in the
+// app, which matters because the island shows these all day while music plays.
+// (The old TimelineView version re-ran SwiftUI 30×/s: ~7% CPU, constantly.)
 struct EQBars: View {
     var playing: Bool
     var tint: Color = .white
@@ -522,30 +603,121 @@ struct EQBars: View {
     var barWidth: CGFloat = 2.4
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !playing)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            HStack(spacing: barWidth * 0.9) {
-                ForEach(0..<barCount, id: \.self) { i in
-                    let p = Double(i) * 1.37
-                    // Beat pulse (~100 bpm) that ripples bar-to-bar…
-                    let beat = pow(max(0, sin(t * 2 * .pi * 0.83 + p * 0.8)), 3)
-                    // …under a slower groove and a fast shimmer.
-                    let groove = 0.5 + 0.5 * sin(t * 2.9 + p * 2.1)
-                    let shimmer = 0.5 + 0.5 * sin(t * 12.7 + p * 4.7)
-                    // Mid bars run hotter, like a spectrum.
-                    let shape = 1.0 - Double(abs(i - barCount / 2)) * 0.16
-                    let level = playing
-                        ? (0.14 + (0.55 * beat + 0.24 * groove + 0.12 * shimmer) * shape)
-                        : 0.1
-                    Capsule()
-                        .fill(LinearGradient(colors: [tint, tint.opacity(0.72)],
-                                             startPoint: .top, endPoint: .bottom))
-                        .opacity(playing ? 1 : 0.45)
-                        .frame(width: barWidth, height: maxHeight * 0.2 + maxHeight * 0.8 * CGFloat(min(1, level)))
-                }
-            }
-            .frame(height: maxHeight, alignment: .center)
+        // A platform view has no text baseline and would otherwise take
+        // whatever height it's offered — pin it to exactly the bars' size.
+        EQBarsLayer(playing: playing, tint: tint, barCount: barCount,
+                    maxHeight: maxHeight, barWidth: barWidth)
+            .frame(width: CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barWidth * 0.9,
+                   height: maxHeight)
+    }
+}
+
+private struct EQBarsLayer: NSViewRepresentable {
+    var playing: Bool
+    var tint: Color
+    var barCount: Int
+    var maxHeight: CGFloat
+    var barWidth: CGFloat
+
+    func makeNSView(context: Context) -> EQBarsView {
+        EQBarsView(count: barCount, barWidth: barWidth, maxHeight: maxHeight)
+    }
+    func updateNSView(_ v: EQBarsView, context: Context) {
+        v.setTint(NSColor(tint))
+        v.setPlaying(playing)
+    }
+}
+
+final class EQBarsView: NSView {
+    private let count: Int, barWidth: CGFloat, maxHeight: CGFloat
+    private var bars: [CALayer] = []
+    private var playing: Bool?
+    private static let loop: Double = 3.614          // exactly 3 beats at ~0.83 Hz
+    private static let restScale: CGFloat = 0.22
+
+    init(count: Int, barWidth: CGFloat, maxHeight: CGFloat) {
+        self.count = count; self.barWidth = barWidth; self.maxHeight = maxHeight
+        super.init(frame: .zero)
+        wantsLayer = true
+        for _ in 0..<count {
+            let l = CALayer()
+            l.cornerRadius = barWidth / 2
+            l.backgroundColor = NSColor.white.cgColor
+            l.transform = CATransform3DMakeScale(1, Self.restScale, 1)
+            layer?.addSublayer(l)
+            bars.append(l)
         }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: CGFloat(count) * barWidth + CGFloat(count - 1) * barWidth * 0.9, height: maxHeight)
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        let gap = barWidth * 0.9
+        let total = CGFloat(count) * barWidth + CGFloat(count - 1) * gap
+        var x = (bounds.width - total) / 2 + barWidth / 2
+        for l in bars {
+            l.bounds = CGRect(x: 0, y: 0, width: barWidth, height: maxHeight)
+            l.position = CGPoint(x: x, y: bounds.midY)     // grows from the centre
+            x += barWidth + gap
+        }
+        CATransaction.commit()
+    }
+
+    func setTint(_ c: NSColor) {
+        let cg = c.cgColor
+        CATransaction.begin(); CATransaction.setAnimationDuration(0.6)   // fade to the new album colour
+        bars.forEach { $0.backgroundColor = cg }
+        CATransaction.commit()
+    }
+
+    func setPlaying(_ on: Bool) {
+        guard on != playing else { return }
+        playing = on
+        for (i, l) in bars.enumerated() {
+            if on {
+                l.add(Self.animation(bar: i, of: count), forKey: "eq")
+                l.opacity = 1
+            } else {
+                // Freeze where it is, then settle down to rest.
+                let current = l.presentation()?.transform ?? l.transform
+                l.removeAnimation(forKey: "eq")
+                l.transform = current
+                CATransaction.begin(); CATransaction.setAnimationDuration(0.35)
+                l.transform = CATransform3DMakeScale(1, Self.restScale, 1)
+                l.opacity = 0.45
+                CATransaction.commit()
+            }
+        }
+    }
+
+    // Bake the layered motion into a seamless loop of keyframes.
+    private static func animation(bar i: Int, of n: Int) -> CAAnimation {
+        let steps = 44
+        let p = Double(i) * 1.37
+        let shape = 1.0 - Double(abs(i - n / 2)) * 0.16
+        var values: [NSValue] = []
+        for k in 0...steps {
+            let t = loop * Double(k) / Double(steps)
+            let beat = pow(max(0, sin(t * 2 * .pi * 0.83 + p * 0.8)), 3)
+            let groove = 0.5 + 0.5 * sin(t * 2 * .pi / loop * 2 + p * 2.1)     // 2 cycles / loop
+            let shimmer = 0.5 + 0.5 * sin(t * 2 * .pi / loop * 11 + p * 4.7)   // 11 cycles / loop
+            let level = min(1, 0.14 + (0.55 * beat + 0.24 * groove + 0.12 * shimmer) * shape)
+            let scale = 0.2 + 0.8 * level
+            values.append(NSValue(caTransform3D: CATransform3DMakeScale(1, scale, 1)))
+        }
+        let a = CAKeyframeAnimation(keyPath: "transform")
+        a.values = values
+        a.duration = loop
+        a.calculationMode = .cubic
+        a.repeatCount = .infinity
+        a.isRemovedOnCompletion = false
+        return a
     }
 }
 
@@ -586,6 +758,100 @@ struct MusicIslandContent: View {
     }
 }
 
+// MARK: - Spinning disc (Core Animation)
+
+/// The cover art on a single CALayer. Rotation is a layer transform set
+/// directly from the Turntable's timer, so a spinning record costs the GPU
+/// one texture rotate per frame and SwiftUI nothing.
+struct SpinningDisc: NSViewRepresentable {
+    let image: NSImage?
+    let turntable: Turntable
+
+    func makeNSView(context: Context) -> DiscView {
+        let v = DiscView()
+        v.setImage(image)
+        wire(v)
+        v.setAngle(turntable.angle)
+        turntable.reattach()
+        return v
+    }
+    func updateNSView(_ v: DiscView, context: Context) {
+        v.setImage(image)
+        wire(v)
+    }
+    private func wire(_ v: DiscView) {
+        turntable.onAngle = { [weak v] a in v?.setAngle(a) }
+        turntable.onCruise = { [weak v] a, speed in v?.cruise(from: a, degreesPerSecond: speed) }
+        turntable.cruiseAngle = { [weak v] in v?.presentedAngle() }
+    }
+    static func dismantleNSView(_ v: DiscView, coordinator: ()) {}
+}
+
+final class DiscView: NSView {
+    private let disc = CALayer()
+    private var current: NSImage?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.masksToBounds = false
+        disc.contentsGravity = .resizeAspectFill
+        disc.masksToBounds = true
+        disc.backgroundColor = NSColor(white: 0.12, alpha: 1).cgColor
+        layer?.addSublayer(disc)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    // Clicks belong to the SwiftUI jog gesture around this view.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        disc.bounds = bounds
+        disc.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        disc.cornerRadius = min(bounds.width, bounds.height) / 2
+        disc.contentsScale = window?.backingScaleFactor ?? 2
+        CATransaction.commit()
+    }
+
+    func setImage(_ img: NSImage?) {
+        guard img !== current else { return }
+        current = img
+        disc.contents = img?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    }
+
+    func setAngle(_ degrees: Double) {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        disc.removeAnimation(forKey: "cruise")
+        // AppKit layers are y-up: negate so it turns clockwise like SwiftUI's.
+        disc.setAffineTransform(CGAffineTransform(rotationAngle: -degrees * .pi / 180))
+        CATransaction.commit()
+    }
+
+    /// Endless constant-speed spin run by the render server — no app work.
+    func cruise(from degrees: Double, degreesPerSecond: Double) {
+        setAngle(degrees)
+        let start = -degrees * .pi / 180
+        let a = CABasicAnimation(keyPath: "transform.rotation.z")
+        a.fromValue = start
+        a.toValue = start - 2 * .pi                 // clockwise on screen
+        a.duration = 360 / degreesPerSecond
+        a.repeatCount = .infinity
+        a.isRemovedOnCompletion = false
+        disc.add(a, forKey: "cruise")
+    }
+
+    /// The angle the disc is visibly at (mid-cruise), in SwiftUI degrees.
+    func presentedAngle() -> Double? {
+        guard let t = disc.presentation()?.transform else { return nil }
+        let rad = atan2(Double(t.m12), Double(t.m11))
+        var deg = -rad * 180 / .pi
+        if deg < 0 { deg += 360 }
+        return deg
+    }
+}
+
 // MARK: - Expanded music panel (spinning record + track info + controls)
 
 // A record pressed from the album art: cover printed across the disc, fine
@@ -602,19 +868,22 @@ struct VinylView: View {
         GeometryReader { geo in
             let cx = geo.size.width / 2, cy = geo.size.height / 2
             ZStack {
-                ZStack {
-                    ArtworkView(image: image)
-                    // Grooves ride along with the disc.
-                    ForEach(0..<9, id: \.self) { i in
-                        let d = size * (0.5 + CGFloat(i) * 0.058)
-                        Circle()
-                            .stroke(Color.black.opacity(i % 3 == 0 ? 0.3 : 0.16), lineWidth: 0.6)
-                            .frame(width: d, height: d)
-                    }
+                // Shadow lives on a STILL disc underneath — never re-rendered.
+                Circle().fill(Color.black)
+                    .frame(width: size, height: size)
+                    .shadow(color: .black.opacity(0.7), radius: 14, x: 0, y: 8)
+                // The only thing that turns: one GPU layer holding the cover.
+                SpinningDisc(image: image, turntable: turntable)
+                    .frame(width: size, height: size)
+                    .allowsHitTesting(false)
+                // Grooves are concentric, so they needn't rotate at all.
+                ForEach(0..<9, id: \.self) { i in
+                    let d = size * (0.5 + CGFloat(i) * 0.058)
+                    Circle()
+                        .stroke(Color.black.opacity(i % 3 == 0 ? 0.3 : 0.16), lineWidth: 0.6)
+                        .frame(width: d, height: d)
                 }
-                .frame(width: size, height: size)
-                .clipShape(Circle())
-                .rotationEffect(.degrees(turntable.angle))
+                .allowsHitTesting(false)
 
                 // Fixed light: two soft glints across the vinyl.
                 Circle()
@@ -668,7 +937,6 @@ struct VinylView: View {
             )
         }
         .frame(width: size, height: size)
-        .shadow(color: .black.opacity(0.7), radius: 14, x: 0, y: 8)
     }
 }
 
@@ -685,7 +953,7 @@ struct MusicPanel: View {
                     VStack(alignment: .leading, spacing: 0) {
                         source(np)
                             .padding(.bottom, 6)
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        HStack(alignment: .center, spacing: 6) {
                             Text(np.title)
                                 .font(.system(size: 14, weight: .semibold))
                                 .lineLimit(1)
@@ -754,6 +1022,11 @@ struct MusicPanel: View {
                                    startPoint: .top, endPoint: .bottom)
                 }
             }
+            // The cover is scaled-to-FILL a wide panel, so it overflows far
+            // above and below. Clipping only hides that overflow — it still
+            // hit-tests, and it was sitting invisibly over the tab buttons
+            // and the gear, swallowing every click ("can't click Camera").
+            .allowsHitTesting(false)
             .transition(.opacity)
         }
     }

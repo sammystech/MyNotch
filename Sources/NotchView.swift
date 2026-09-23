@@ -139,6 +139,9 @@ struct NotchRootView: View {
             }
             .padding(.horizontal, 2)
             .frame(height: state.notchSize.height)
+            // Always above the panel content, so nothing a widget draws (or
+            // overflows) can ever sit over the tabs and eat their clicks.
+            .zIndex(2)
 
             ZStack {
                 Group {
@@ -157,6 +160,7 @@ struct NotchRootView: View {
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
 
             footer
+                .zIndex(2)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 6)
