@@ -105,6 +105,13 @@ struct NotchRootView: View {
 
         return ZStack(alignment: .top) {
             shape.fill(Color.black)             // pure, fully opaque black
+            // Mirror goes full-bleed: the camera fills the whole notch, edge
+            // to edge (shoulders included), under the tabs and footer.
+            if expanded && state.selected == .mirror {
+                MirrorPanel(controller: camera)
+                    .frame(width: visible.width + flare * 2, height: visible.height)
+                    .transition(.bloom)
+            }
             if expanded {
                 expandedPanel
                     .frame(width: state.openSize.width, height: state.openSize.height)
@@ -146,7 +153,7 @@ struct NotchRootView: View {
             ZStack {
                 Group {
                     switch state.selected {
-                    case .mirror:   MirrorPanel(controller: camera)
+                    case .mirror:   Color.clear   // drawn full-bleed behind, in `notch`
                     case .music:    MusicPanel(controller: music, turntable: turntable)
                     case .shelf:    ShelfPanel(controller: shelf)
                     case .calendar: CalendarPanel(controller: calendar)

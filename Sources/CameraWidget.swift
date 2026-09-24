@@ -102,6 +102,10 @@ final class CameraNSView: NSView {
         super.layout()
         previewLayer.frame = bounds
     }
+
+    // The feed now sits UNDER the tab bar and footer (full-bleed). Never take
+    // clicks, or AppKit would route taps on those buttons to the video.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 struct CameraPreview: NSViewRepresentable {
@@ -118,11 +122,15 @@ struct CameraPreview: NSViewRepresentable {
     func updateNSView(_ nsView: CameraNSView, context: Context) {}
 }
 
+// Full-bleed mirror: the feed fills the ENTIRE open notch, edge to edge —
+// no inner card, no black bezel. The notch shape itself does the clipping, and
+// the tabs + footer float on top over soft scrims so they stay readable.
 struct MirrorPanel: View {
     @ObservedObject var controller: CameraController
+
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         ZStack {
+            Color.black
             // Shows for the instant before the first frame arrives.
             if controller.status.isEmpty {
                 Image(systemName: "camera.fill")
@@ -130,18 +138,21 @@ struct MirrorPanel: View {
                     .foregroundColor(.white.opacity(0.12))
             }
             CameraPreview(session: controller.session)
-            // Soft vignette + glass rim so the feed sits IN the panel like a
-            // lens rather than a flat rectangle.
-            RadialGradient(colors: [.clear, .black.opacity(0.35)],
-                           center: .center, startRadius: 80, endRadius: 240)
-                .allowsHitTesting(false)
-            shape.strokeBorder(
-                LinearGradient(colors: [.white.opacity(0.22), .white.opacity(0.04)],
-                               startPoint: .top, endPoint: .bottom),
-                lineWidth: 0.8)
-                .allowsHitTesting(false)
+
+            // Scrims: darken just the strips where the tabs and footer sit.
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.black.opacity(0.55), .black.opacity(0.2), .clear],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: 58)
+                Spacer(minLength: 0)
+                LinearGradient(colors: [.clear, .black.opacity(0.45)],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: 40)
+            }
+            .allowsHitTesting(false)
+
             if !controller.status.isEmpty {
-                Color.black.opacity(0.7)
+                Color.black.opacity(0.75)
                 VStack(spacing: 9) {
                     Image(systemName: controller.accessDenied ? "video.slash.fill" : "camera.fill")
                         .font(.system(size: 16, weight: .semibold))
@@ -161,11 +172,9 @@ struct MirrorPanel: View {
                         }
                     }
                 }
-                .padding()
+                .padding(.top, 20)   // clear of the tab bar
             }
         }
-        .background(Color.black)
-        .clipShape(shape)
         // NOTE: no onAppear/onDisappear start/stop here. NotchRootView's
         // onChange handlers are the single driver — a MirrorPanel mid-removal
         // transition would otherwise fire a late onDisappear→stop() that kills
