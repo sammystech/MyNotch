@@ -97,7 +97,7 @@ final class HitContainerView: NSView {
         // Collapsed: clicking the album art toggles playback; anywhere else opens.
         let p = convert(event.locationInWindow, from: nil)
         if let art = artWingRect(), art.contains(p) {
-            Haptics.tap()
+            Haptics.confirm(after: 0.5)     // from mouse-down, so ≈ same feel
             MusicController.shared.playPause()
         } else {
             clickAction?()
@@ -364,7 +364,6 @@ final class NotchController {
             }
         }
         if state.hoveringArt != overArt {
-            if overArt { Haptics.hover() }      // landed on the play/pause art
             withAnimation(.easeOut(duration: 0.15)) { state.hoveringArt = overArt }
         }
     }
@@ -533,7 +532,7 @@ final class NotchController {
                         self.panel.sendEvent(e)
                     }
                 }
-                FileHandle.standardError.write("DEBUGCLICK \(p) -> selected=\(self.state.selected)\n".data(using: .utf8)!)
+                FileHandle.standardError.write(String(format: "DEBUGCLICK %.3f released %@ -> selected=%@\n", CACurrentMediaTime(), "\(p)", "\(self.state.selected)").data(using: .utf8)!)
             }
         }
     }

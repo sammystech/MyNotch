@@ -247,8 +247,7 @@ private struct Grabber: View {
                         else { onToggle() }
                     }
             )
-            .hoverTick()
-            .onChange(of: pressing) { _, down in if down { Haptics.tap() } }
+            .onChange(of: pressing) { was, down in if was && !down { Haptics.confirm() } }
             .help(extended ? "Show less" : "Show more")
     }
 }

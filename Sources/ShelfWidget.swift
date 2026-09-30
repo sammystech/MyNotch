@@ -340,7 +340,6 @@ private struct TrayFileView: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onHover { h in
-            if h { Haptics.hover() }
             withAnimation(NotchMotion.press) { hover.on = h }
         }
         // Lands with a spring pop, then settles.
@@ -352,7 +351,7 @@ private struct TrayFileView: View {
             removal: .scale(scale: 0.6).combined(with: .opacity)))
         // Drag back OUT to Finder, Mail, anywhere.
         .onDrag { NSItemProvider(contentsOf: item.url) ?? NSItemProvider() }
-        .onTapGesture(count: 2) { Haptics.tap(); controller.open(item) }
+        .onTapGesture(count: 2) { Haptics.confirm(); controller.open(item) }
         .contextMenu {
             Button("Open") { controller.open(item) }
             Button("Show in Finder") { controller.revealInFinder(item) }

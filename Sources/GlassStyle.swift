@@ -128,38 +128,47 @@ extension View {
 /// and a firmer one the instant you press it. Both follow Settings →
 /// Haptic Feedback. (Force Touch trackpads only; a no-op on a mouse.)
 enum Haptics {
-    private static var lastHover: CFTimeInterval = 0
+    typealias Pattern = NSHapticFeedbackManager.FeedbackPattern
     private static let log = ProcessInfo.processInfo.environment["MYNOTCH_HAPTICLOG"] == "1"
     private static func note(_ s: String) {
-        if log { FileHandle.standardError.write("HAPTIC \(s)\n".data(using: .utf8)!) }
+        if log { FileHandle.standardError.write(String(format: "HAPTIC %.3f %@\n", CACurrentMediaTime(), s).data(using: .utf8)!) }
     }
 
-    /// Pointer moved onto a control. Rate-limited so sweeping across a row
-    /// of buttons reads as distinct ticks, not a buzz.
-    static func hover() {
+    /// How long after you LET GO the confirmation starts. Firing on the
+    /// press itself landed on top of the trackpad's own click and felt like
+    /// a double-click; this way the click is the click, and the rumble a
+    /// beat later is the "got it". (Release + 0.4s ≈ half a second after
+    /// you pressed.)
+    static let afterRelease: Double = 0.4
+
+    /// A settling rumble ~0.9s long: firm first, then softer ticks spaced
+    /// further and further apart, like something coming to rest. macOS has
+    /// no continuous vibration — only single ticks in three strengths — so
+    /// this is the closest natural "vibrate for a second".
+    private static let rumble: [(at: Double, pattern: Pattern)] = [
+        (0.00, .levelChange),
+        (0.11, .generic),
+        (0.24, .generic),
+        (0.40, .alignment),
+        (0.60, .alignment),
+        (0.86, .alignment),
+    ]
+    private static var pending: [DispatchWorkItem] = []
+
+    /// Confirm a click. A new click restarts the rumble rather than
+    /// stacking two on top of each other.
+    static func confirm(after delay: Double = afterRelease) {
         guard Prefs.shared.haptics else { return }
-        let now = CACurrentMediaTime()
-        guard now - lastHover > 0.12 else { return }
-        lastHover = now
-        note("hover")
-        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-    }
-
-    /// A press registered. Fired on mouse-DOWN, in step with the trackpad's
-    /// own click, so it lands as one crisp confirmation rather than a
-    /// second "double-click" bump a beat later.
-    static func tap() {
-        guard Prefs.shared.haptics else { return }
-        note("tap")
-        // .levelChange is the strongest of macOS's three trackpad patterns.
-        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
-    }
-}
-
-extension View {
-    /// Tick when the pointer enters this view.
-    func hoverTick() -> some View {
-        onHover { inside in if inside { Haptics.hover() } }
+        pending.forEach { $0.cancel() }
+        pending = rumble.map { step in
+            let w = DispatchWorkItem {
+                note("tick +\(step.at)")
+                NSHapticFeedbackManager.defaultPerformer.perform(step.pattern, performanceTime: .now)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay + step.at, execute: w)
+            return w
+        }
+        note("confirm scheduled")
     }
 }
 
@@ -174,10 +183,9 @@ struct PressStyle: ButtonStyle {
             .brightness(configuration.isPressed ? 0.12 : 0)
             .animation(NotchMotion.press, value: configuration.isPressed)
             // Every button in the island uses this style, so this one spot
-            // gives all of them the hover tick + press confirmation.
-            .hoverTick()
-            .onChange(of: configuration.isPressed) { _, pressed in
-                if pressed { Haptics.tap() }
+            // gives all of them the click confirmation — on RELEASE.
+            .onChange(of: configuration.isPressed) { was, now in
+                if was && !now { Haptics.confirm() }
             }
     }
 }
@@ -230,9 +238,8 @@ struct IslandSwitchStyle: ToggleStyle {
         }
         .frame(width: 34, height: 20)
         .contentShape(Capsule())
-        .hoverTick()
-        .onTapGesture {
-            Haptics.tap()
+        .onTapGesture {        // fires on release
+            Haptics.confirm()
             withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { configuration.isOn.toggle() }
         }
     }
