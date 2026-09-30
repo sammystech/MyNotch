@@ -141,17 +141,9 @@ enum Haptics {
     /// you pressed.)
     static let afterRelease: Double = 0.4
 
-    /// A settling rumble ~0.9s long: firm first, then softer ticks spaced
-    /// further and further apart, like something coming to rest. macOS has
-    /// no continuous vibration — only single ticks in three strengths — so
-    /// this is the closest natural "vibrate for a second".
+    /// One small tick — just a quiet "got it", not a rumble.
     private static let rumble: [(at: Double, pattern: Pattern)] = [
-        (0.00, .levelChange),
-        (0.11, .generic),
-        (0.24, .generic),
-        (0.40, .alignment),
-        (0.60, .alignment),
-        (0.86, .alignment),
+        (0.00, .generic),
     ]
     private static var pending: [DispatchWorkItem] = []
 
