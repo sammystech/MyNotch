@@ -121,6 +121,48 @@ extension View {
     }
 }
 
+// MARK: - Haptics
+
+/// Trackpad feedback for everything inside the island, like iOS's taptic
+/// ticks: a faint tick when the pointer lands on something you can click,
+/// and a firmer one the instant you press it. Both follow Settings →
+/// Haptic Feedback. (Force Touch trackpads only; a no-op on a mouse.)
+enum Haptics {
+    private static var lastHover: CFTimeInterval = 0
+    private static let log = ProcessInfo.processInfo.environment["MYNOTCH_HAPTICLOG"] == "1"
+    private static func note(_ s: String) {
+        if log { FileHandle.standardError.write("HAPTIC \(s)\n".data(using: .utf8)!) }
+    }
+
+    /// Pointer moved onto a control. Rate-limited so sweeping across a row
+    /// of buttons reads as distinct ticks, not a buzz.
+    static func hover() {
+        guard Prefs.shared.haptics else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastHover > 0.12 else { return }
+        lastHover = now
+        note("hover")
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    }
+
+    /// A press registered. Fired on mouse-DOWN, in step with the trackpad's
+    /// own click, so it lands as one crisp confirmation rather than a
+    /// second "double-click" bump a beat later.
+    static func tap() {
+        guard Prefs.shared.haptics else { return }
+        note("tap")
+        // .levelChange is the strongest of macOS's three trackpad patterns.
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+    }
+}
+
+extension View {
+    /// Tick when the pointer enters this view.
+    func hoverTick() -> some View {
+        onHover { inside in if inside { Haptics.hover() } }
+    }
+}
+
 // MARK: - Buttons
 
 /// Press feedback that feels physical: squish + brighten, springs back.
@@ -131,6 +173,12 @@ struct PressStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? scale : 1)
             .brightness(configuration.isPressed ? 0.12 : 0)
             .animation(NotchMotion.press, value: configuration.isPressed)
+            // Every button in the island uses this style, so this one spot
+            // gives all of them the hover tick + press confirmation.
+            .hoverTick()
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed { Haptics.tap() }
+            }
     }
 }
 
@@ -182,7 +230,9 @@ struct IslandSwitchStyle: ToggleStyle {
         }
         .frame(width: 34, height: 20)
         .contentShape(Capsule())
+        .hoverTick()
         .onTapGesture {
+            Haptics.tap()
             withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { configuration.isOn.toggle() }
         }
     }

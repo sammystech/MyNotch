@@ -59,6 +59,8 @@ struct SettingsPanel: View {
                             Label("GitHub", systemImage: "arrow.up.right")
                                 .labelStyle(TrailingIconLabel())
                         }
+                        .hoverTick()
+                        .simultaneousGesture(TapGesture().onEnded { Haptics.tap() })
                     }
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundColor(.white.opacity(0.4))

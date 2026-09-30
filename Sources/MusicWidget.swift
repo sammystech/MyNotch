@@ -914,6 +914,7 @@ struct VinylView: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .contentShape(Circle())
+            .hoverTick()
             // Grab & spin to scrub: rotating the record seeks the song, with a
             // speed-tracked whir while you spin.
             .gesture(
@@ -921,8 +922,7 @@ struct VinylView: View {
                     .onChanged { v in
                         let ang = atan2(Double(v.location.y - cy), Double(v.location.x - cx)) * 180 / .pi
                         if !controller.jogging {
-                            NSHapticFeedbackManager.defaultPerformer
-                                .perform(.alignment, performanceTime: .default)
+                            Haptics.tap()
                             controller.beginJog()
                             turntable.beginJog(cursorAngle: ang)
                         }
@@ -1064,9 +1064,11 @@ struct MusicPanel: View {
                     .frame(height: geo.size.height, alignment: .center)
                     .animation(NotchMotion.nudge, value: active)
                     .contentShape(Rectangle())
+                    .hoverTick()
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { v in
+                                if controller.scrubbing == nil { Haptics.tap() }
                                 NotchState.shared.interacting = true
                                 controller.scrubbing = min(1, max(0, Double(v.location.x / w)))
                             }

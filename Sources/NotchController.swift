@@ -97,6 +97,7 @@ final class HitContainerView: NSView {
         // Collapsed: clicking the album art toggles playback; anywhere else opens.
         let p = convert(event.locationInWindow, from: nil)
         if let art = artWingRect(), art.contains(p) {
+            Haptics.tap()
             MusicController.shared.playPause()
         } else {
             clickAction?()
@@ -363,6 +364,7 @@ final class NotchController {
             }
         }
         if state.hoveringArt != overArt {
+            if overArt { Haptics.hover() }      // landed on the play/pause art
             withAnimation(.easeOut(duration: 0.15)) { state.hoveringArt = overArt }
         }
     }
@@ -489,6 +491,29 @@ final class NotchController {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3 + Double(steps + 1) * 0.025) {
                 send(.leftMouseUp, 360)
                 FileHandle.standardError.write("DEBUGJOG released\n".data(using: .utf8)!)
+            }
+            return
+        }
+        // "move:x,y;x,y" = pointer moves (hover), 0.3s apart, no clicks.
+        let hoverOnly = spec.hasPrefix("move:")
+        let body = hoverOnly ? String(spec.dropFirst(5)) : spec
+        if hoverOnly {
+            let pts = body.split(separator: ";").compactMap { pair -> CGPoint? in
+                let v = pair.split(separator: ",").compactMap { Double($0) }
+                return v.count == 2 ? CGPoint(x: v[0], y: v[1]) : nil
+            }
+            for (i, p) in pts.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5 + Double(i) * 0.3) { [weak self] in
+                    guard let self else { return }
+                    let loc = NSPoint(x: p.x, y: self.panel.frame.height - p.y)
+                    if let e = NSEvent.mouseEvent(with: .mouseMoved, location: loc, modifierFlags: [],
+                                                  timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: self.panel.windowNumber, context: nil,
+                                                  eventNumber: 0, clickCount: 0, pressure: 0) {
+                        self.panel.sendEvent(e)
+                    }
+                    FileHandle.standardError.write("DEBUGMOVE \(p)\n".data(using: .utf8)!)
+                }
             }
             return
         }
