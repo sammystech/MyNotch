@@ -457,12 +457,14 @@ extension Notification.Name {
 
 // MARK: - The island HUD view
 
-/// The pill the island becomes while you press volume/brightness: icon on
-/// the left under the notch, a level bar, and the percentage — springing out
-/// of the notch exactly like the iPhone's Dynamic Island.
+/// What the island shows while you press volume/brightness. It stays level
+/// with the notch: the icon sits in the left wing, the level bar and the
+/// number in the right wing, the hardware notch in the gap between them.
 struct HUDIslandContent: View {
     let hud: HUDState
-    let notchHeight: CGFloat
+    /// Width of the hardware notch to leave empty in the middle (0 = a
+    /// free-standing pill, used when the panel is already open).
+    let notchGap: CGFloat
 
     private var symbol: String {
         if hud.kind == .brightness {
@@ -473,32 +475,36 @@ struct HUDIslandContent: View {
         return "speaker.wave.3.fill"
     }
 
+    private var shown: Double { hud.muted ? 0 : hud.level }
+
     var body: some View {
-        VStack(spacing: 0) {
-            Color.clear.frame(height: notchHeight)        // the hardware notch
-            HStack(spacing: 10) {
-                Image(systemName: symbol, variableValue: hud.kind == .volume && !hud.muted ? hud.level : 1)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white.opacity(hud.muted ? 0.55 : 1))
-                    .frame(width: 20)
-                    .contentTransition(.symbolEffect(.replace))
+        HStack(spacing: 0) {
+            Image(systemName: symbol, variableValue: hud.kind == .volume && !hud.muted ? hud.level : 1)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white.opacity(hud.muted ? 0.55 : 1))
+                .frame(width: 22)
+                .contentTransition(.symbolEffect(.replace))
+                .padding(.leading, 14)
+            Spacer(minLength: notchGap == 0 ? 12 : notchGap)
+            HStack(spacing: 7) {
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.18))
+                        Capsule().fill(Color.white.opacity(0.2))
                         Capsule()
-                            .fill(Color.white.opacity(hud.muted ? 0.35 : 1))
-                            .frame(width: max(6, g.size.width * CGFloat(hud.muted ? 0 : hud.level)))
+                            .fill(Color.white)
+                            .frame(width: max(5, g.size.width * CGFloat(shown)))
+                            .opacity(hud.muted ? 0 : 1)
                     }
                 }
-                .frame(height: 6)
-                Text("\(Int((hud.muted ? 0 : hud.level) * 100 + 0.5))")
-                    .font(.system(size: 11.5, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundColor(.white.opacity(0.75))
-                    .frame(width: 26, alignment: .trailing)
+                .frame(width: 46, height: 5)
+                Text("\(Int(shown * 100 + 0.5))")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundColor(.white.opacity(0.8))
+                    .frame(width: 22, alignment: .trailing)
                     .contentTransition(.numericText())
             }
-            .padding(.horizontal, 16)
-            .frame(maxHeight: .infinity)
+            .padding(.trailing, 12)
         }
+        .frame(maxHeight: .infinity)
     }
 }

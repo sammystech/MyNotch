@@ -72,10 +72,10 @@ final class NotchState: ObservableObject {
 
     // What the collapsed notch actually shows right now: bare notch, or the
     // music island (wings), grown slightly while peeking.
-    // The volume/brightness pill: wider than the notch, and grown downward
-    // to hold the icon + level bar under it, like the iPhone island.
-    let hudWing: CGFloat = 40
-    let hudDrop: CGFloat = 34
+    // The volume/brightness pill stays LEVEL with the notch (no drop):
+    // icon in the left wing, level bar + number in the right wing.
+    let hudWing: CGFloat = 92
+    let hudDrop: CGFloat = 0
 
     var collapsedVisibleSize: CGSize {
         if hud != nil {

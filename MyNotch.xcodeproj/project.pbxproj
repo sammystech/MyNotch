@@ -20,6 +20,7 @@
 		9419AACFF82A2F5F7B849425 /* ShelfWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88D055CC0AE34AAA44F46A8B /* ShelfWidget.swift */; };
 		99D8585C4F0B7C35B1DB459B /* Updater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03A62F0C72611AED22D9BCF5 /* Updater.swift */; };
 		9D7CF1EAAC411977B2D8B9AD /* CalendarWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B4A2A2FF2EA91DD75C2ADF /* CalendarWidget.swift */; };
+		BE45E47DB132B3AC4029B365 /* SystemHUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA413C6571AACBA173308B2 /* SystemHUD.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,6 +28,7 @@
 		055075331B022D9653FB7FD5 /* SettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPanel.swift; sourceTree = "<group>"; };
 		0BEA2C3BB417FCBA3EBE753F /* NotchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchController.swift; sourceTree = "<group>"; };
 		0E17211D8825DBFF2CF17195 /* CameraWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWidget.swift; sourceTree = "<group>"; };
+		1DA413C6571AACBA173308B2 /* SystemHUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemHUD.swift; sourceTree = "<group>"; };
 		2F7091711C7CC0E98780CEAD /* Widgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Widgets.swift; sourceTree = "<group>"; };
 		81164A87F03012E85B8662C1 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		83BBB2F82164ACA2811E79F5 /* NotchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchView.swift; sourceTree = "<group>"; };
@@ -54,6 +56,7 @@
 				A1A19BB4EA0D54439B9F2A6E /* ScratchAudio.swift */,
 				055075331B022D9653FB7FD5 /* SettingsPanel.swift */,
 				88D055CC0AE34AAA44F46A8B /* ShelfWidget.swift */,
+				1DA413C6571AACBA173308B2 /* SystemHUD.swift */,
 				03A62F0C72611AED22D9BCF5 /* Updater.swift */,
 				2F7091711C7CC0E98780CEAD /* Widgets.swift */,
 			);
@@ -170,6 +173,7 @@
 				0A3EC74A0506C495D6F2F20B /* ScratchAudio.swift in Sources */,
 				8D267EE579BA400B80985BA0 /* SettingsPanel.swift in Sources */,
 				9419AACFF82A2F5F7B849425 /* ShelfWidget.swift in Sources */,
+				BE45E47DB132B3AC4029B365 /* SystemHUD.swift in Sources */,
 				99D8585C4F0B7C35B1DB459B /* Updater.swift in Sources */,
 				35535336D05B9142A5429CDB /* Widgets.swift in Sources */,
 			);
