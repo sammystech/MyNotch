@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		011927DA0F4C89574EE10E10 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81164A87F03012E85B8662C1 /* App.swift */; };
+		04C4F91C3BC22728D2FE22DE /* ClaudeToast.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62AD59E7F3242444F77D0EF5 /* ClaudeToast.swift */; };
 		0A3EC74A0506C495D6F2F20B /* ScratchAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A19BB4EA0D54439B9F2A6E /* ScratchAudio.swift */; };
 		123319DD0504B97B9F610AC9 /* NotchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83BBB2F82164ACA2811E79F5 /* NotchView.swift */; };
 		26280CD0B4441C281F0C21A2 /* CameraWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E17211D8825DBFF2CF17195 /* CameraWidget.swift */; };
@@ -30,6 +31,7 @@
 		0E17211D8825DBFF2CF17195 /* CameraWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraWidget.swift; sourceTree = "<group>"; };
 		1DA413C6571AACBA173308B2 /* SystemHUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemHUD.swift; sourceTree = "<group>"; };
 		2F7091711C7CC0E98780CEAD /* Widgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Widgets.swift; sourceTree = "<group>"; };
+		62AD59E7F3242444F77D0EF5 /* ClaudeToast.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeToast.swift; sourceTree = "<group>"; };
 		81164A87F03012E85B8662C1 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		83BBB2F82164ACA2811E79F5 /* NotchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchView.swift; sourceTree = "<group>"; };
 		88D055CC0AE34AAA44F46A8B /* ShelfWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShelfWidget.swift; sourceTree = "<group>"; };
@@ -48,6 +50,7 @@
 				81164A87F03012E85B8662C1 /* App.swift */,
 				F6B4A2A2FF2EA91DD75C2ADF /* CalendarWidget.swift */,
 				0E17211D8825DBFF2CF17195 /* CameraWidget.swift */,
+				62AD59E7F3242444F77D0EF5 /* ClaudeToast.swift */,
 				F65CBD1D9BF4DB46EBDA0BC3 /* GlassStyle.swift */,
 				EE7C8945D0CE0DA961E874EE /* MusicWidget.swift */,
 				0BEA2C3BB417FCBA3EBE753F /* NotchController.swift */,
@@ -165,6 +168,7 @@
 				011927DA0F4C89574EE10E10 /* App.swift in Sources */,
 				9D7CF1EAAC411977B2D8B9AD /* CalendarWidget.swift in Sources */,
 				26280CD0B4441C281F0C21A2 /* CameraWidget.swift in Sources */,
+				04C4F91C3BC22728D2FE22DE /* ClaudeToast.swift in Sources */,
 				2DD2574F9B2ED8C35891964F /* GlassStyle.swift in Sources */,
 				6D08C6C77880B3238360F0E1 /* MusicWidget.swift in Sources */,
 				710D31E2DC7C20C8EA488273 /* NotchController.swift in Sources */,
