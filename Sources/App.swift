@@ -74,7 +74,7 @@ final class NotchState: ObservableObject {
     // music island (wings), grown slightly while peeking.
     // The volume/brightness pill stays LEVEL with the notch (no drop):
     // icon in the left wing, level bar + number in the right wing.
-    let hudWing: CGFloat = 92
+    let hudWing: CGFloat = 74
     let hudDrop: CGFloat = 0
 
     var collapsedVisibleSize: CGSize {

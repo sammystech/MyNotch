@@ -480,30 +480,33 @@ struct HUDIslandContent: View {
     var body: some View {
         HStack(spacing: 0) {
             Image(systemName: symbol, variableValue: hud.kind == .volume && !hud.muted ? hud.level : 1)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 11.5, weight: .semibold))
                 .foregroundColor(.white.opacity(hud.muted ? 0.55 : 1))
-                .frame(width: 22)
+                .frame(width: 20)
                 .contentTransition(.symbolEffect(.replace))
-                .padding(.leading, 14)
+                .padding(.leading, 12)
             Spacer(minLength: notchGap == 0 ? 12 : notchGap)
-            HStack(spacing: 7) {
+            HStack(spacing: 6) {
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.2))
+                        Capsule().fill(Color.white.opacity(0.18))
                         Capsule()
                             .fill(Color.white)
-                            .frame(width: max(5, g.size.width * CGFloat(shown)))
+                            .frame(width: max(3.5, g.size.width * CGFloat(shown)))
                             .opacity(hud.muted ? 0 : 1)
                     }
                 }
-                .frame(width: 46, height: 5)
+                .frame(width: 34, height: 3.5)
+                // One line, always — "100" used to wrap onto two lines.
                 Text("\(Int(shown * 100 + 0.5))")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundColor(.white.opacity(0.8))
-                    .frame(width: 22, alignment: .trailing)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundColor(.white.opacity(0.75))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .frame(width: 21, alignment: .trailing)
                     .contentTransition(.numericText())
             }
-            .padding(.trailing, 12)
+            .padding(.trailing, 11)
         }
         .frame(maxHeight: .infinity)
     }
