@@ -29,6 +29,17 @@ struct SettingsPanel: View {
 
                     card {
                         row("Volume & Brightness in Notch", "speaker.wave.2.fill", .purple, $settings.systemHUD)
+                        // Make the choice obvious: notch pill vs Apple's original popup.
+                        if !settings.systemHUD || hudTrusted {
+                            Text(settings.systemHUD
+                                 ? "Volume and brightness show in the notch. Turn off to use Apple's original popups."
+                                 : "Using Apple's original volume and brightness popups.")
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.45))
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.leading, 30).padding(.bottom, 6)
+                        }
                         if settings.systemHUD && !hudTrusted {
                             HStack(spacing: 8) {
                                 Text("Needs Accessibility access to replace the macOS popups.")
