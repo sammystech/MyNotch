@@ -311,8 +311,10 @@ final class SystemHUD {
 
     /// How long the island stays out after the last press.
     private let holdTime: TimeInterval = 1.5
-    private static let step = 1.0 / 16.0       // macOS's own step
-    private static let fineStep = 1.0 / 64.0   // ⌥⇧ + key, also like macOS
+    // Clean, round steps: 0, 10, 20 … 100 (user didn't want macOS's 1/16
+    // steps, which land on 6, 13, 19 … 94). ⌥⇧ + key steps by 5.
+    private static let step = 0.10
+    private static let fineStep = 0.05
 
     var isActive: Bool { tap.isRunning }
     var isTrusted: Bool { AXIsProcessTrusted() }
@@ -389,10 +391,10 @@ final class SystemHUD {
         case .mute:
             volume.set(muted: !volume.muted)
         case .volumeUp:
-            volume.set(volume: Self.snap(volume.volume + step, step))
+            volume.set(volume: Self.stepped(volume.volume, up: true, by: step))
             adjustedVolume = true
         default:
-            volume.set(volume: Self.snap(volume.volume - step, step))
+            volume.set(volume: Self.stepped(volume.volume, up: false, by: step))
             adjustedVolume = true
         }
         show(.volume)
@@ -400,14 +402,18 @@ final class SystemHUD {
 
     private func applyBrightness(up: Bool, fine: Bool) {
         let step = fine ? Self.fineStep : Self.step
-        let target = Self.snap(brightness.brightness + (up ? step : -step), step)
+        let target = Self.stepped(brightness.brightness, up: up, by: step)
         brightness.set(brightness: target)
         show(.brightness, level: target)
     }
 
-    /// Land exactly on the step grid, like macOS's 16 squares.
-    private static func snap(_ v: Double, _ step: Double) -> Double {
-        min(1, max(0, (v / step).rounded() * step))
+    /// The next clean level in that direction: from 63, up → 70 and
+    /// down → 60; from 70, up → 80. Never lands between grid lines.
+    static func stepped(_ v: Double, up: Bool, by step: Double) -> Double {
+        let units = v / step
+        let eps = 0.001
+        let next = up ? (units + eps).rounded(.down) + 1 : (units - eps).rounded(.up) - 1
+        return min(1, max(0, (next * step * 1000).rounded() / 1000))
     }
 
     /// Show (or update) the island HUD, then tuck it away after a pause.
