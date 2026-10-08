@@ -51,7 +51,7 @@ final class HitContainerView: NSView {
     // toggles play/pause instead of opening the panel.
     private func artWingRect() -> NSRect? {
         let s = NotchState.shared
-        guard s.musicActive, !s.expanded else { return nil }
+        guard s.musicActive, !s.expanded, s.hud == nil, s.toast == nil else { return nil }
         let vis = s.collapsedVisibleSize
         let wing = (vis.width - s.notchSize.width) / 2
         guard wing > 6 else { return nil }
@@ -446,6 +446,8 @@ final class NotchController {
 
     private func openPanel() {
         guard !state.expanded else { return }
+        // A toast is showing: clicking it goes to its app (Claude), not the panel.
+        if state.toast != nil && state.hud == nil { Toasts.shared.activate(); return }
         // No artificial haptic here — the trackpad's own click is the
         // feedback; adding .levelChange on top read as a hard double-click.
         withAnimation(Self.anim) {

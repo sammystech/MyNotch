@@ -33,6 +33,7 @@ final class NotchState: ObservableObject {
     var debugPinned = false                   // MYNOTCH_PIN=1: never auto-close (testing)
     var debugFakeDrag = false                 // MYNOTCH_FAKEDRAG=1: hold the armed state (testing)
     @Published var hud: HUDState?             // volume/brightness pill showing in the island
+    @Published var toast: ToastState?         // a message popped out of the notch
     @Published var selected: WidgetKind = .mirror
 
     // notchSize is measured from the hardware notch at launch.
@@ -77,7 +78,13 @@ final class NotchState: ObservableObject {
     let hudWing: CGFloat = 74
     let hudDrop: CGFloat = 0
 
+    let toastWing: CGFloat = 70
+    let toastDrop: CGFloat = 46
+
     var collapsedVisibleSize: CGSize {
+        if hud == nil, toast != nil {
+            return CGSize(width: notchSize.width + toastWing * 2, height: notchSize.height + toastDrop)
+        }
         if hud != nil {
             return CGSize(width: notchSize.width + hudWing * 2, height: notchSize.height + hudDrop)
         }
@@ -99,6 +106,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var loginMenuItem: NSMenuItem!
     private let launchKey = "launchAtLogin"
+
+    // mynotch://notify?title=…&subtitle=… → a toast out of the notch.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach { Toasts.shared.handle($0) }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)   // no Dock icon

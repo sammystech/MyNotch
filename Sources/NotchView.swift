@@ -100,7 +100,8 @@ struct NotchRootView: View {
         let flare = expanded ? Self.shoulder : 0
         // Tight radius when collapsed — less rounded-corner area where the
         // translucent menu bar peeks through around our opaque black.
-        let radius: CGFloat = expanded ? 32 : (state.hud != nil ? 12 : (state.peeking ? 12 : 10))
+        let radius: CGFloat = expanded ? 32
+            : (state.hud == nil && state.toast != nil ? 24 : (state.hud != nil ? 12 : (state.peeking ? 12 : 10)))
         let shape = NotchShape(bottomRadius: radius, shoulder: flare)
 
         return ZStack(alignment: .top) {
@@ -115,6 +116,10 @@ struct NotchRootView: View {
             if expanded {
                 expandedPanel
                     .frame(width: state.openSize.width, height: state.openSize.height)
+                    .transition(.bloom)
+            } else if state.hud == nil, let toast = state.toast {
+                ToastIslandContent(toast: toast, notchHeight: state.notchSize.height)
+                    .frame(width: visible.width, height: visible.height)
                     .transition(.bloom)
             } else if let hud = state.hud {
                 // Volume / brightness: the island springs out into a pill.
@@ -132,7 +137,7 @@ struct NotchRootView: View {
         .clipShape(shape)
         // Two-layer shadow: a tight contact shadow plus a wide soft one, so
         // the panel floats like a real object instead of casting a smudge.
-        .shadow(color: .black.opacity(expanded ? 0.45 : (state.peeking || state.hud != nil ? 0.3 : 0)),
+        .shadow(color: .black.opacity(expanded ? 0.45 : (state.peeking || state.hud != nil || state.toast != nil ? 0.3 : 0)),
                 radius: expanded ? 6 : 4, x: 0, y: expanded ? 3 : 2)
         .shadow(color: .black.opacity(expanded ? 0.5 : 0),
                 radius: expanded ? 26 : 0, x: 0, y: expanded ? 16 : 0)
@@ -179,7 +184,18 @@ struct NotchRootView: View {
         // Panel already open: the volume/brightness pill floats over its
         // lower edge instead of springing out of the notch.
         .overlay(alignment: .bottom) {
-            if let hud = state.hud {
+            if state.hud == nil, let toast = state.toast {
+                ToastIslandContent(toast: toast, notchHeight: 0).row
+                    .padding(.horizontal, 14)
+                    .frame(width: 300, height: 50)
+                    .background(Capsule().fill(Color.black))
+                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.7))
+                    .shadow(color: .black.opacity(0.6), radius: 12, y: 4)
+                    .padding(.bottom, 28)
+                    .onTapGesture { Toasts.shared.activate() }
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                    .zIndex(3)
+            } else if let hud = state.hud {
                 HUDIslandContent(hud: hud, notchGap: 0)
                     .frame(width: 230, height: 34)
                     .background(Capsule().fill(Color.black))
