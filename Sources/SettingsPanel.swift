@@ -6,6 +6,10 @@ struct SettingsPanel: View {
     @ObservedObject private var settings = Prefs.shared
     @ObservedObject private var shelf = ShelfController.shared
 
+    // Re-read when the tap comes up after access is granted.
+    @ObservedObject private var hudStatus = HUDStatus.shared
+    private var hudTrusted: Bool { hudStatus.trusted }
+
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
     }
@@ -21,6 +25,28 @@ struct SettingsPanel: View {
                         row("Open at Login", "power", .gray, $settings.launchAtLogin)
                         separator
                         row("Haptic Feedback", "hand.tap.fill", .blue, $settings.haptics)
+                    }
+
+                    card {
+                        row("Volume & Brightness in Notch", "speaker.wave.2.fill", .purple, $settings.systemHUD)
+                        if settings.systemHUD && !hudTrusted {
+                            HStack(spacing: 8) {
+                                Text("Needs Accessibility access to replace the macOS popups.")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.5))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 4)
+                                GlassPillButton(title: "Allow") {
+                                    SystemHUD.shared.requestAccess()
+                                    if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                                        NSWorkspace.shared.open(u)
+                                    }
+                                }
+                            }
+                            .padding(.leading, 30).padding(.bottom, 6)
+                        }
+                        separator
+                        row("Install Updates Automatically", "arrow.triangle.2.circlepath", .green, $settings.autoUpdate)
                     }
 
                     card {
@@ -138,5 +164,16 @@ struct SettingsPanel: View {
 private struct TrailingIconLabel: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 3) { configuration.title; configuration.icon.font(.system(size: 8.5, weight: .bold)) }
+    }
+}
+
+/// Publishes whether Accessibility is granted, so Settings updates live.
+final class HUDStatus: ObservableObject {
+    static let shared = HUDStatus()
+    @Published var trusted = AXIsProcessTrusted()
+    private init() {
+        NotificationCenter.default.addObserver(forName: .systemHUDChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.trusted = AXIsProcessTrusted()
+        }
     }
 }

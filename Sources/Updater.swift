@@ -21,13 +21,21 @@ final class Updater {
 
     // MARK: Entry points
 
-    /// Silent check on launch, then once a day. Only speaks up if there's news.
+    private var periodic: Timer?
+
+    /// Silent check shortly after launch and then every 6 hours for as long
+    /// as the app runs (it lives for days, so a launch-only check went stale).
+    /// With "Install Updates Automatically" on, a new version installs itself.
     func checkInBackgroundIfDue() {
-        let last = UserDefaults.standard.double(forKey: lastCheckKey)
-        let day: TimeInterval = 60 * 60 * 24
-        guard Date().timeIntervalSince1970 - last > day else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
             self?.check(interactive: false)
+        }
+        if periodic == nil {
+            let t = Timer(timeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
+                self?.check(interactive: false)
+            }
+            RunLoop.main.add(t, forMode: .common)
+            periodic = t
         }
     }
 
@@ -82,7 +90,11 @@ final class Updater {
             }
             // Respect a previous "Skip this version" unless they asked explicitly.
             if !interactive, UserDefaults.standard.string(forKey: self.skipKey) == latest { return }
-            self.offer(version: latest, notes: notes, dmg: dmgURL)
+            if !interactive && Prefs.shared.autoUpdate {
+                self.installWhenIdle(dmgURL, version: latest)
+            } else {
+                self.offer(version: latest, notes: notes, dmg: dmgURL)
+            }
         }.resume()
     }
 
@@ -129,6 +141,22 @@ final class Updater {
         }
     }
 
+    // MARK: Automatic install
+
+    /// Don't yank the app out from under someone mid-use: wait until the
+    /// notch is closed and nothing is being dragged/scrubbed, then install.
+    private func installWhenIdle(_ url: URL, version: String) {
+        DispatchQueue.main.async {
+            let s = NotchState.shared
+            if s.expanded || s.interacting || s.fileDragArmed || s.hud != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 60) { self.installWhenIdle(url, version: version) }
+                return
+            }
+            NSLog("MyNotch auto-updating to \(version)")
+            self.download(url, version: version)
+        }
+    }
+
     // MARK: Download + install
 
     private func download(_ url: URL, version: String) {
@@ -167,6 +195,12 @@ final class Updater {
 
         hdiutil attach "$DMG" -nobrowse -quiet -mountpoint "$MOUNT"
         NEW=$(find "$MOUNT" -maxdepth 1 -name "*.app" -print -quit)
+        # Only ever swap in a build that's intact AND signed by our own
+        # Developer ID team — updates can install without anyone clicking.
+        if [ -n "$NEW" ] && ! { codesign --verify --deep --strict "$NEW" 2>/dev/null \
+             && codesign -dv "$NEW" 2>&1 | grep -q "TeamIdentifier=CH6CSBA54G"; }; then
+          NEW=""
+        fi
         if [ -n "$NEW" ]; then
           rm -rf "$APP"
           cp -R "$NEW" "$APP"

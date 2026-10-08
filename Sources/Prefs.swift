@@ -10,6 +10,8 @@ final class Prefs: ObservableObject {
     @Published var musicIsland: Bool { didSet { set(musicIsland, "prefMusicIsland") } }
     @Published var scratchSound: Bool { didSet { set(scratchSound, "prefScratchSound") } }
     @Published var launchAtLogin: Bool { didSet { LoginItem.set(launchAtLogin) } }
+    @Published var systemHUD: Bool { didSet { set(systemHUD, "prefSystemHUD"); SystemHUD.shared.sync() } }
+    @Published var autoUpdate: Bool { didSet { set(autoUpdate, "prefAutoUpdate") } }
 
     private init() {
         let d = UserDefaults.standard
@@ -20,6 +22,15 @@ final class Prefs: ObservableObject {
         musicIsland   = flag("prefMusicIsland")
         scratchSound  = flag("prefScratchSound")
         launchAtLogin = LoginItem.isEnabled
+        systemHUD     = flag("prefSystemHUD")
+        // Auto-update is ON for every new install, and forced on ONCE for
+        // everyone moving to this version (even if they'd turned it off) —
+        // after that, their choice sticks.
+        if !d.bool(forKey: "autoUpdateForcedOn1") {
+            d.set(true, forKey: "autoUpdateForcedOn1")
+            d.set(true, forKey: "prefAutoUpdate")
+        }
+        autoUpdate    = flag("prefAutoUpdate")
     }
 
     private func set(_ v: Bool, _ key: String) { UserDefaults.standard.set(v, forKey: key) }

@@ -32,6 +32,7 @@ final class NotchState: ObservableObject {
     var airDropRect: CGRect = .zero           // AirDrop box, window coords (top-left origin)
     var debugPinned = false                   // MYNOTCH_PIN=1: never auto-close (testing)
     var debugFakeDrag = false                 // MYNOTCH_FAKEDRAG=1: hold the armed state (testing)
+    @Published var hud: HUDState?             // volume/brightness pill showing in the island
     @Published var selected: WidgetKind = .mirror
 
     // notchSize is measured from the hardware notch at launch.
@@ -71,7 +72,15 @@ final class NotchState: ObservableObject {
 
     // What the collapsed notch actually shows right now: bare notch, or the
     // music island (wings), grown slightly while peeking.
+    // The volume/brightness pill: wider than the notch, and grown downward
+    // to hold the icon + level bar under it, like the iPhone island.
+    let hudWing: CGFloat = 40
+    let hudDrop: CGFloat = 34
+
     var collapsedVisibleSize: CGSize {
+        if hud != nil {
+            return CGSize(width: notchSize.width + hudWing * 2, height: notchSize.height + hudDrop)
+        }
         var w = notchSize.width + (musicActive ? islandWing * 2 : 0)
         var h = notchSize.height
         if peeking { w += peekGrowW; h += peekGrowH }
@@ -102,10 +111,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // when a launch-at-login app starts. Keep them off the launch path.
         DispatchQueue.global(qos: .utility).async { [weak self] in self?.syncLoginItem() }
         Updater.shared.checkInBackgroundIfDue()   // silent; speaks up only if there is news
+        SystemHUD.shared.sync()                    // volume/brightness → island
 
         // Debug hook for screenshot verification (MYNOTCH_EXPAND=1 [MYNOTCH_TAB=…]).
         let env = ProcessInfo.processInfo.environment
         if env["MYNOTCH_PIN"] == "1" { NotchState.shared.debugPinned = true }
+        if let keys = env["MYNOTCH_KEYS"] { SystemHUD.shared.runDebugKeys(keys) }
         if env["MYNOTCH_FAKEDRAG"] == "1" {
             NotchState.shared.debugFakeDrag = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NotchState.shared.fileDragArmed = true }

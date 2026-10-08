@@ -47,7 +47,7 @@ struct NowPlaying: Equatable {
 // Physics-y record spin: velocity eases toward a target, so the disc spins
 // UP smoothly when playback starts and coasts DOWN to a stop when it pauses —
 // no abrupt freeze. Runs a 60 Hz timer only while it's actually turning.
-final class Turntable: ObservableObject {
+final class Turntable: NSObject, ObservableObject {
     // NOT @Published: publishing at 60Hz made SwiftUI re-render the whole
     // record every frame (~20% CPU). The angle goes straight to a Core
     // Animation layer through `onAngle` instead — SwiftUI never sees it.
@@ -72,7 +72,7 @@ final class Turntable: ObservableObject {
     }
     private var velocity: Double = 0            // deg/sec
     private let targetSpeed: Double = 46        // ~7.7 rpm, a calm spin
-    private var timer: Timer?
+    private var timer: CADisplayLink?
     private var last = Date()
 
     var playing: Bool = false {
@@ -86,12 +86,17 @@ final class Turntable: ObservableObject {
     private func ensureRunning() {
         guard timer == nil, !cruising else { return }
         last = Date()
-        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.tick() }
-        // .common, not the default mode: the default mode pauses while the
-        // mouse is held down (event tracking), which made the record hitch.
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
+        // Driven by the display's own refresh (120Hz on ProMotion), not a
+        // fixed 60Hz timer. .common mode so it keeps running while the mouse
+        // is held down (event tracking) — the default mode made it hitch.
+        guard let screen = NSScreen.main else { return }
+        let link = screen.displayLink(target: self, selector: #selector(frame))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        timer = link
     }
+
+    @objc private func frame() { tick() }
 
     func stop() { timer?.invalidate(); timer = nil }
 
@@ -716,6 +721,7 @@ final class EQBarsView: NSView {
         a.duration = loop
         a.calculationMode = .cubic
         a.repeatCount = .infinity
+        a.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
         a.isRemovedOnCompletion = false
         return a
     }
@@ -838,6 +844,7 @@ final class DiscView: NSView {
         a.toValue = start - 2 * .pi                 // clockwise on screen
         a.duration = 360 / degreesPerSecond
         a.repeatCount = .infinity
+        a.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
         a.isRemovedOnCompletion = false
         disc.add(a, forKey: "cruise")
     }
