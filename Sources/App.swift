@@ -124,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .utility).async { [weak self] in self?.syncLoginItem() }
         Updater.shared.checkInBackgroundIfDue()   // silent; speaks up only if there is news
         SystemHUD.shared.sync()                    // volume/brightness → island
+        SystemEvents.shared.sync()                 // USB / Bluetooth / Wi-Fi / charger → notch
 
         // Debug hook for screenshot verification (MYNOTCH_EXPAND=1 [MYNOTCH_TAB=…]).
         let env = ProcessInfo.processInfo.environment

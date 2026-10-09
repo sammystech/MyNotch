@@ -17,6 +17,7 @@ struct ToastState: Equatable {
     var subtitle: String
     var icon: String = "claude"        // "claude", "app:<bundle id>", or an SF Symbol
     var openBundle: String?            // app to bring forward when the toast is clicked
+    var badge: String? = "check"       // trailing mark; nil = none
     var id = UUID()
 }
 
@@ -42,18 +43,19 @@ final class Toasts {
              subtitle: q["subtitle"] ?? "",
              icon: q["icon"] ?? "claude",
              sound: q["sound"] ?? "Ping",
-             open: q["open"])
+             open: q["open"],
+             badge: q["badge"] ?? "check")
         return true
     }
 
     func show(title: String, subtitle: String, icon: String = "claude",
-              sound: String? = "Ping", open: String? = nil) {
+              sound: String? = "Ping", open: String? = nil, badge: String? = "check") {
         let s = NotchState.shared
         // Default click target: Claude for the Claude icon, the app itself for app: icons.
         let target = open ?? (icon == "claude" ? "com.anthropic.claudefordesktop"
                               : icon.hasPrefix("app:") ? String(icon.dropFirst(4)) : nil)
         withAnimation(NotchMotion.morph) {
-            s.toast = ToastState(title: title, subtitle: subtitle, icon: icon, openBundle: target)
+            s.toast = ToastState(title: title, subtitle: subtitle, icon: icon, openBundle: target, badge: badge)
         }
         if let sound, !sound.isEmpty, let snd = NSSound(named: NSSound.Name(sound)) {
             snd.stop(); snd.play()
@@ -140,11 +142,12 @@ private struct ToastIcon: View {
     var body: some View {
         if icon.hasPrefix("device:") {
             // Hardware (AirPods, Beats…): a big, crisp glyph, no tile — like
-            // the iPhone's connection pop-up.
-            Image(systemName: String(icon.dropFirst(7)))
+            // the iPhone's connection pop-up. Optional tint: "device:wifi#34C759".
+            let parts = String(icon.dropFirst(7)).split(separator: "#", maxSplits: 1).map(String.init)
+            Image(systemName: parts[0])
                 .font(.system(size: 26, weight: .regular))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.white)
+                .foregroundStyle(parts.count > 1 ? Color(hex: parts[1]) : .white)
                 .frame(width: 38, height: 38)
         } else if icon.hasPrefix("app:"), let img = Toasts.appIcon(String(icon.dropFirst(4))) {
             // The app's own icon already has its shape and depth.
@@ -207,10 +210,21 @@ struct ToastIslandContent: View {
                 }
             }
             Spacer(minLength: 6)
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.black, Color(red: 0.2, green: 0.82, blue: 0.4))
+            if toast.badge == "check" {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.black, Color(red: 0.2, green: 0.82, blue: 0.4))
+            }
         }
+    }
+}
+
+extension Color {
+    /// "34C759" → Color.
+    init(hex: String) {
+        let v = UInt64(hex, radix: 16) ?? 0xFFFFFF
+        self.init(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255,
+                  blue: Double(v & 0xFF) / 255)
     }
 }

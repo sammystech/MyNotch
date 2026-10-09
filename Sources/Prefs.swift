@@ -14,6 +14,7 @@ final class Prefs: ObservableObject {
     @Published var autoUpdate: Bool { didSet { set(autoUpdate, "prefAutoUpdate") } }
     @Published var claudePopups: Bool { didSet { set(claudePopups, "prefClaudePopups") } }
     @Published var codexPopups: Bool { didSet { set(codexPopups, "prefCodexPopups") } }
+    @Published var deviceAlerts: Bool { didSet { set(deviceAlerts, "prefDeviceAlerts"); SystemEvents.shared.sync() } }
 
     private init() {
         let d = UserDefaults.standard
@@ -27,6 +28,7 @@ final class Prefs: ObservableObject {
         systemHUD     = flag("prefSystemHUD")
         claudePopups  = flag("prefClaudePopups")
         codexPopups   = flag("prefCodexPopups")
+        deviceAlerts  = flag("prefDeviceAlerts")
         // Auto-update is ON for every new install, and forced on ONCE for
         // everyone moving to this version (even if they'd turned it off) —
         // after that, their choice sticks.

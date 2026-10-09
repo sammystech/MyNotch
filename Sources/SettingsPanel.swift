@@ -61,10 +61,12 @@ struct SettingsPanel: View {
                     }
 
                     card {
+                        row("Device & Wi-Fi Alerts", "cable.connector", .blue, $settings.deviceAlerts)
+                        separator
                         row("Claude Code Pop-ups", "sparkle", Color(red: 0.85, green: 0.47, blue: 0.34), $settings.claudePopups)
                         separator
                         row("Codex Pop-ups", "chevron.left.forwardslash.chevron.right", .indigo, $settings.codexPopups)
-                        Text("A ping and a pop-up from the notch when a conversation finishes.")
+                        Text("Pop-ups from the notch when you plug something in, a Bluetooth device connects, Wi-Fi drops, or a conversation finishes.")
                             .font(.system(size: 10))
                             .foregroundColor(.white.opacity(0.45))
                             .frame(maxWidth: .infinity, alignment: .leading)

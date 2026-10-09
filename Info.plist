@@ -28,13 +28,15 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>16</string>
+	<string>17</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>MyNotch reads Music and Spotify to show what's playing in the notch.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>My Notch shows a pop-up in the notch when a Bluetooth device connects or disconnects.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>My Notch shows today's events in the notch.</string>
 	<key>NSCalendarsUsageDescription</key>
