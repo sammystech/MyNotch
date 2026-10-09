@@ -159,16 +159,25 @@ final class SystemEvents: NSObject {
             btDisconnects.append(d)
         }
         // Headphones are announced by the audio switch (with the model glyph).
-        guard !Self.isAudio(device) else { return }
+        guard !Self.isAudio(device), !Self.isIgnored(device) else { return }
         alert(device.name ?? "Bluetooth Device", "Connected", Self.btSymbol(device), check: true)
     }
 
     @objc private func btDisconnected(_ note: IOBluetoothUserNotification, device: IOBluetoothDevice) {
         note.unregister()
         btDisconnects.removeAll { $0 === note }
+        guard !Self.isIgnored(device) else { return }
         let name = device.name ?? "Bluetooth Device"
         let symbol = Self.isAudio(device) ? VolumeControl.headphoneSymbol(for: name) : Self.btSymbol(device)
         alert(name, "Disconnected", symbol)
+    }
+
+    /// Things that connect/disconnect constantly on their own and aren't worth
+    /// a pop-up — an Apple Watch reconnects every time it wakes.
+    private static func isIgnored(_ d: IOBluetoothDevice) -> Bool {
+        let n = (d.name ?? "").lowercased()
+        return n.contains("apple watch") || n.contains("watch")
+            || d.deviceClassMajor == UInt32(kBluetoothDeviceClassMajorWearable)
     }
 
     private static func isAudio(_ d: IOBluetoothDevice) -> Bool {
