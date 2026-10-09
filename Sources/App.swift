@@ -129,6 +129,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let env = ProcessInfo.processInfo.environment
         if env["MYNOTCH_PIN"] == "1" { NotchState.shared.debugPinned = true }
         if let keys = env["MYNOTCH_KEYS"] { SystemHUD.shared.runDebugKeys(keys) }
+        // MYNOTCH_OPENURL="mynotch://notify?…": deliver a URL in-process (tests).
+        if let u = env["MYNOTCH_OPENURL"], let url = URL(string: u) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { Toasts.shared.handle(url) }
+        }
         if env["MYNOTCH_FAKEDRAG"] == "1" {
             NotchState.shared.debugFakeDrag = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NotchState.shared.fileDragArmed = true }

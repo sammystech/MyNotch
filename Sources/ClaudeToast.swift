@@ -4,14 +4,19 @@ import SwiftUI
 // MARK: - Notch toasts (e.g. "Claude Code — conversation finished")
 //
 // Anything on the Mac can pop a message out of the notch by opening
-//   mynotch://notify?title=…&subtitle=…&icon=claude&sound=Ping
+//   mynotch://notify?title=…&subtitle=…&icon=claude&sound=Ping[&open=<bundle id>]
+// icon is "claude" (drawn burst), "app:<bundle id or /path/to/App.app>" (that
+// app's real icon, e.g. app:/Applications/Codex.app), or any SF Symbol name.
+// open is a bundle id or an app path. (Codex and ChatGPT share one bundle id,
+// com.openai.codex, so Codex is addressed by its path.)
 // (`open -g` keeps whatever you're doing in front). The Claude Code Stop hook
 // at ~/.claude/hooks/notch-done.sh uses this when a conversation finishes.
 
 struct ToastState: Equatable {
     var title: String
     var subtitle: String
-    var icon: String = "claude"        // "claude" or an SF Symbol name
+    var icon: String = "claude"        // "claude", "app:<bundle id>", or an SF Symbol
+    var openBundle: String?            // app to bring forward when the toast is clicked
     var id = UUID()
 }
 
@@ -30,14 +35,19 @@ final class Toasts {
         show(title: q["title"] ?? "Claude Code",
              subtitle: q["subtitle"] ?? "",
              icon: q["icon"] ?? "claude",
-             sound: q["sound"] ?? "Ping")
+             sound: q["sound"] ?? "Ping",
+             open: q["open"])
         return true
     }
 
-    func show(title: String, subtitle: String, icon: String = "claude", sound: String? = "Ping") {
+    func show(title: String, subtitle: String, icon: String = "claude",
+              sound: String? = "Ping", open: String? = nil) {
         let s = NotchState.shared
+        // Default click target: Claude for the Claude icon, the app itself for app: icons.
+        let target = open ?? (icon == "claude" ? "com.anthropic.claudefordesktop"
+                              : icon.hasPrefix("app:") ? String(icon.dropFirst(4)) : nil)
         withAnimation(NotchMotion.morph) {
-            s.toast = ToastState(title: title, subtitle: subtitle, icon: icon)
+            s.toast = ToastState(title: title, subtitle: subtitle, icon: icon, openBundle: target)
         }
         if let sound, !sound.isEmpty, let snd = NSSound(named: NSSound.Name(sound)) {
             snd.stop(); snd.play()
@@ -53,13 +63,43 @@ final class Toasts {
         withAnimation(NotchMotion.collapse) { NotchState.shared.toast = nil }
     }
 
-    /// Clicking the toast jumps to Claude.
+    /// Clicking the toast jumps to the app it's about (Claude, Codex, …).
     func activate() {
-        if let t = NotchState.shared.toast, t.icon == "claude",
-           let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.anthropic.claudefordesktop") {
+        if let id = NotchState.shared.toast?.openBundle, let app = Self.appURL(id) {
             NSWorkspace.shared.openApplication(at: app, configuration: .init())
         }
         dismiss()
+    }
+
+    /// Real app icons for "app:<bundle id>", cached.
+    private static var iconCache: [String: NSImage] = [:]
+    static func appIcon(_ ref: String) -> NSImage? {
+        if let hit = iconCache[ref] { return hit }
+        guard let url = appURL(ref) else { return nil }
+        let lazy = NSWorkspace.shared.icon(forFile: url.path)
+        // Workspace icons draw lazily, and SwiftUI rendered them blank — so
+        // rasterize once into a plain bitmap at a crisp size.
+        let px = 96
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        lazy.draw(in: NSRect(x: 0, y: 0, width: px, height: px))
+        NSGraphicsContext.restoreGraphicsState()
+        let img = NSImage(size: NSSize(width: 32, height: 32))
+        img.addRepresentation(rep)
+        iconCache[ref] = img
+        return img
+    }
+
+    /// A bundle id, or a path to an .app.
+    static func appURL(_ ref: String) -> URL? {
+        if ref.hasPrefix("/") {
+            return FileManager.default.fileExists(atPath: ref) ? URL(fileURLWithPath: ref) : nil
+        }
+        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: ref)
     }
 }
 
@@ -92,6 +132,17 @@ private let claudeCoral = Color(red: 0.85, green: 0.47, blue: 0.34)
 private struct ToastIcon: View {
     let icon: String
     var body: some View {
+        if icon.hasPrefix("app:"), let img = Toasts.appIcon(String(icon.dropFirst(4))) {
+            // The app's own icon already has its shape and depth.
+            Image(nsImage: img).resizable().interpolation(.high)
+                .frame(width: 32, height: 32)
+                .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
+        } else {
+            tile
+        }
+    }
+
+    private var tile: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(LinearGradient(colors: [Color(white: 0.16), Color(white: 0.09)],
