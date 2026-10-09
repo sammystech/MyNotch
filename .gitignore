@@ -5,3 +5,4 @@ dist/
 .release-build/
 MyNotch.xcodeproj/xcuserdata/
 MyNotch.xcodeproj/project.xcworkspace/xcuserdata/
+.dmgvenv/

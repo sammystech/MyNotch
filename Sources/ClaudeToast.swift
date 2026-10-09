@@ -26,7 +26,9 @@ struct ToastState: Equatable {
 final class Toasts {
     static let shared = Toasts()
     private var hideWork: DispatchWorkItem?
-    private let holdTime: TimeInterval = 4.5
+    // How long a pop-up stays out (user: "stay up too long" at 4.5s).
+    private let holdTime: TimeInterval = 3.2
+    private let tallHoldTime: TimeInterval = 3.8   // notifications: a beat longer to read the message
 
     /// Handle mynotch://notify?… — returns true if the URL was ours.
     @discardableResult
@@ -71,7 +73,7 @@ final class Toasts {
         hideWork?.cancel()
         let w = DispatchWorkItem { self.dismiss() }
         hideWork = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + holdTime, execute: w)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (tall ? tallHoldTime : holdTime), execute: w)
     }
 
     func dismiss() {

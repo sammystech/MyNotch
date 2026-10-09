@@ -119,11 +119,14 @@ say "Packaging the DMG…"
 mkdir -p dist
 DMG="dist/MyNotch.dmg"
 rm -f "$DMG"
-STAGE="$(mktemp -d)"
-cp -R "$APP" "$STAGE/"
-ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "My Notch" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
-rm -rf "$STAGE"
+# The styled install window (dark background, app → Applications arrow) is
+# laid out by dmgbuild from dmg/settings.py + dmg/background.tiff — no Finder
+# scripting, so it's identical every release.
+if [ ! -x .dmgvenv/bin/dmgbuild ]; then
+    python3 -m venv .dmgvenv && .dmgvenv/bin/pip install -q dmgbuild || die "Couldn't install dmgbuild."
+fi
+.dmgvenv/bin/dmgbuild -s dmg/settings.py -D app="$APP" "My Notch" "$DMG" >/dev/null 2>&1 \
+    || die "dmgbuild failed."
 # Signed so the download itself is attributable; the app inside carries its
 # own stapled notarization ticket, which is what Gatekeeper checks.
 codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG" || die "Couldn't sign the DMG."
