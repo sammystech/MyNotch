@@ -12,9 +12,11 @@
 		0A3EC74A0506C495D6F2F20B /* ScratchAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A19BB4EA0D54439B9F2A6E /* ScratchAudio.swift */; };
 		123319DD0504B97B9F610AC9 /* NotchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83BBB2F82164ACA2811E79F5 /* NotchView.swift */; };
 		26280CD0B4441C281F0C21A2 /* CameraWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E17211D8825DBFF2CF17195 /* CameraWidget.swift */; };
+		27D26AB6CB2BB63362C5E957 /* NotificationMirror.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8A6D7130156024F15903587 /* NotificationMirror.swift */; };
 		2DD2574F9B2ED8C35891964F /* GlassStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = F65CBD1D9BF4DB46EBDA0BC3 /* GlassStyle.swift */; };
 		35535336D05B9142A5429CDB /* Widgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7091711C7CC0E98780CEAD /* Widgets.swift */; };
 		411BC69E73F3522CEA068EFD /* Prefs.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3723B2BF148CA7E57205EC3 /* Prefs.swift */; };
+		47656DE7CF375876C0E09E57 /* SystemEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98EBB597B2813631716CEB15 /* SystemEvents.swift */; };
 		6D08C6C77880B3238360F0E1 /* MusicWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE7C8945D0CE0DA961E874EE /* MusicWidget.swift */; };
 		710D31E2DC7C20C8EA488273 /* NotchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BEA2C3BB417FCBA3EBE753F /* NotchController.swift */; };
 		8D267EE579BA400B80985BA0 /* SettingsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055075331B022D9653FB7FD5 /* SettingsPanel.swift */; };
@@ -35,8 +37,10 @@
 		81164A87F03012E85B8662C1 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		83BBB2F82164ACA2811E79F5 /* NotchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchView.swift; sourceTree = "<group>"; };
 		88D055CC0AE34AAA44F46A8B /* ShelfWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShelfWidget.swift; sourceTree = "<group>"; };
+		98EBB597B2813631716CEB15 /* SystemEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemEvents.swift; sourceTree = "<group>"; };
 		A1A19BB4EA0D54439B9F2A6E /* ScratchAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAudio.swift; sourceTree = "<group>"; };
 		B03FE4B1E584DFA490F78A04 /* MyNotch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyNotch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D8A6D7130156024F15903587 /* NotificationMirror.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationMirror.swift; sourceTree = "<group>"; };
 		E3723B2BF148CA7E57205EC3 /* Prefs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Prefs.swift; sourceTree = "<group>"; };
 		EE7C8945D0CE0DA961E874EE /* MusicWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicWidget.swift; sourceTree = "<group>"; };
 		F65CBD1D9BF4DB46EBDA0BC3 /* GlassStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassStyle.swift; sourceTree = "<group>"; };
@@ -55,10 +59,12 @@
 				EE7C8945D0CE0DA961E874EE /* MusicWidget.swift */,
 				0BEA2C3BB417FCBA3EBE753F /* NotchController.swift */,
 				83BBB2F82164ACA2811E79F5 /* NotchView.swift */,
+				D8A6D7130156024F15903587 /* NotificationMirror.swift */,
 				E3723B2BF148CA7E57205EC3 /* Prefs.swift */,
 				A1A19BB4EA0D54439B9F2A6E /* ScratchAudio.swift */,
 				055075331B022D9653FB7FD5 /* SettingsPanel.swift */,
 				88D055CC0AE34AAA44F46A8B /* ShelfWidget.swift */,
+				98EBB597B2813631716CEB15 /* SystemEvents.swift */,
 				1DA413C6571AACBA173308B2 /* SystemHUD.swift */,
 				03A62F0C72611AED22D9BCF5 /* Updater.swift */,
 				2F7091711C7CC0E98780CEAD /* Widgets.swift */,
@@ -173,10 +179,12 @@
 				6D08C6C77880B3238360F0E1 /* MusicWidget.swift in Sources */,
 				710D31E2DC7C20C8EA488273 /* NotchController.swift in Sources */,
 				123319DD0504B97B9F610AC9 /* NotchView.swift in Sources */,
+				27D26AB6CB2BB63362C5E957 /* NotificationMirror.swift in Sources */,
 				411BC69E73F3522CEA068EFD /* Prefs.swift in Sources */,
 				0A3EC74A0506C495D6F2F20B /* ScratchAudio.swift in Sources */,
 				8D267EE579BA400B80985BA0 /* SettingsPanel.swift in Sources */,
 				9419AACFF82A2F5F7B849425 /* ShelfWidget.swift in Sources */,
+				47656DE7CF375876C0E09E57 /* SystemEvents.swift in Sources */,
 				BE45E47DB132B3AC4029B365 /* SystemHUD.swift in Sources */,
 				99D8585C4F0B7C35B1DB459B /* Updater.swift in Sources */,
 				35535336D05B9142A5429CDB /* Widgets.swift in Sources */,
