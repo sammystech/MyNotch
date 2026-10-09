@@ -18,6 +18,7 @@ struct ToastState: Equatable {
     var icon: String = "claude"        // "claude", "app:<bundle id>", or an SF Symbol
     var openBundle: String?            // app to bring forward when the toast is clicked
     var badge: String? = "check"       // trailing mark; nil = none
+    var tall = false                   // notifications: room for a 2-line message
     var id = UUID()
 }
 
@@ -49,13 +50,15 @@ final class Toasts {
     }
 
     func show(title: String, subtitle: String, icon: String = "claude",
-              sound: String? = "Ping", open: String? = nil, badge: String? = "check") {
+              sound: String? = "Ping", open: String? = nil, badge: String? = "check",
+              tall: Bool = false) {
         let s = NotchState.shared
         // Default click target: Claude for the Claude icon, the app itself for app: icons.
         let target = open ?? (icon == "claude" ? "com.anthropic.claudefordesktop"
                               : icon.hasPrefix("app:") ? String(icon.dropFirst(4)) : nil)
         withAnimation(NotchMotion.morph) {
-            s.toast = ToastState(title: title, subtitle: subtitle, icon: icon, openBundle: target, badge: badge)
+            s.toast = ToastState(title: title, subtitle: subtitle, icon: icon, openBundle: target,
+                                 badge: badge, tall: tall)
         }
         if let sound, !sound.isEmpty, let snd = NSSound(named: NSSound.Name(sound)) {
             snd.stop(); snd.play()
@@ -204,8 +207,8 @@ struct ToastIslandContent: View {
                 if !toast.subtitle.isEmpty {
                     Text(toast.subtitle)
                         .font(.system(size: 10.5, weight: .medium))
-                        .foregroundColor(.white.opacity(0.55))
-                        .lineLimit(1)
+                        .foregroundColor(.white.opacity(toast.tall ? 0.72 : 0.55))
+                        .lineLimit(toast.tall ? 2 : 1)
                         .truncationMode(.middle)
                 }
             }

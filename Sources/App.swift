@@ -82,8 +82,9 @@ final class NotchState: ObservableObject {
     let toastDrop: CGFloat = 46
 
     var collapsedVisibleSize: CGSize {
-        if hud == nil, toast != nil {
-            return CGSize(width: notchSize.width + toastWing * 2, height: notchSize.height + toastDrop)
+        if hud == nil, let toast {
+            return CGSize(width: notchSize.width + toastWing * 2,
+                          height: notchSize.height + toastDrop + (toast.tall ? 14 : 0))
         }
         if hud != nil {
             return CGSize(width: notchSize.width + hudWing * 2, height: notchSize.height + hudDrop)
@@ -125,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Updater.shared.checkInBackgroundIfDue()   // silent; speaks up only if there is news
         SystemHUD.shared.sync()                    // volume/brightness → island
         SystemEvents.shared.sync()                 // USB / Bluetooth / Wi-Fi / charger → notch
+        NotificationMirror.shared.sync()           // other apps' notification banners → notch
 
         // Debug hook for screenshot verification (MYNOTCH_EXPAND=1 [MYNOTCH_TAB=…]).
         let env = ProcessInfo.processInfo.environment

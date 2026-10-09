@@ -63,6 +63,12 @@ struct SettingsPanel: View {
                     card {
                         row("Device & Wi-Fi Alerts", "cable.connector", .blue, $settings.deviceAlerts)
                         separator
+                        row("Notifications in Notch", "bell.badge.fill", .red, $settings.notificationsInNotch)
+                        if settings.notificationsInNotch {
+                            separator
+                            row("Hide Corner Banners", "rectangle.badge.xmark", .gray, $settings.hideSystemBanners)
+                        }
+                        separator
                         row("Claude Code Pop-ups", "sparkle", Color(red: 0.85, green: 0.47, blue: 0.34), $settings.claudePopups)
                         separator
                         row("Codex Pop-ups", "chevron.left.forwardslash.chevron.right", .indigo, $settings.codexPopups)

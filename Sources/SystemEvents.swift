@@ -239,12 +239,75 @@ final class SystemEvents: NSObject {
         let ac = Self.isOnAC
         guard ac != onAC else { return }
         onAC = ac
-        let pct = Self.batteryPercent.map { "\($0)%" } ?? ""
         if ac {
-            alert("Charging", pct, "battery.100percent.bolt", tint: "34C759", check: true)
+            // The adapter's details (watts, name) fill in a moment after the
+            // plug goes in — wait for them, up to ~4s.
+            announceCharger(attempt: 0)
         } else {
-            alert("On Battery", pct, Self.batterySymbol)
+            alert("On Battery", Self.batteryPercent.map { "\($0)%" } ?? "", Self.batterySymbol)
         }
+    }
+
+    private func announceCharger(attempt: Int) {
+        let info = Self.chargerInfo()
+        if info.watts == nil && attempt < 8 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.onAC == true else { return }
+                self.announceCharger(attempt: attempt + 1)
+            }
+            return
+        }
+        let pct = Self.batteryPercent ?? 0
+        var parts = [info.port]
+        if let w = info.watts { parts.append("\(w)W") }
+        if info.charging, let mins = Self.minutesToFull, mins > 0 {
+            parts.append(mins >= 60 ? "\(mins / 60) hr \(mins % 60) min to full" : "\(mins) min to full")
+        } else if !info.charging, pct < 100 {
+            parts.append("charging on hold")
+        }
+        alert(info.charging ? "Charging · \(pct)%" : "Plugged In · \(pct)%",
+              parts.joined(separator: " · "), "battery.100percent.bolt", tint: "34C759", check: true)
+    }
+
+    /// Which port the power is coming in on, the adapter's wattage, and
+    /// whether the battery is actually taking charge (Optimized Charging can
+    /// hold it at 80%). The same IOKit sources power utilities like Vorssaint
+    /// read: IOPSCopyExternalPowerAdapterDetails + the AppleSmartBattery entry.
+    static func chargerInfo() -> (port: String, watts: Int?, charging: Bool) {
+        var watts: Int?
+        if let d = IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any] {
+            watts = (d[kIOPSPowerAdapterWattsKey] as? Int).flatMap { $0 > 0 ? $0 : nil }
+        }
+        let port = magSafeActive ? "MagSafe" : "USB-C"
+        let charging = (smartBattery("IsCharging") as? Bool) ?? true
+        return (port, watts, charging)
+    }
+
+    /// The MagSafe port publishes ConnectionActive in the IORegistry.
+    private static var magSafeActive: Bool {
+        let match = ["IOPropertyMatch": ["PortTypeDescription": "MagSafe 3"]] as CFDictionary
+        var iter: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, match, &iter) == KERN_SUCCESS else { return false }
+        defer { IOObjectRelease(iter) }
+        var active = false
+        while case let s = IOIteratorNext(iter), s != 0 {
+            if let v = IORegistryEntryCreateCFProperty(s, "ConnectionActive" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? Bool, v { active = true }
+            IOObjectRelease(s)
+        }
+        return active
+    }
+
+    private static func smartBattery(_ key: String) -> Any? {
+        let s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+        guard s != 0 else { return nil }
+        defer { IOObjectRelease(s) }
+        return IORegistryEntryCreateCFProperty(s, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+    }
+
+    private static var minutesToFull: Int? {
+        guard let m = smartBattery("AvgTimeToFull") as? Int, m > 0, m < 65535 else { return nil }
+        return m
     }
 
     private static var isOnAC: Bool {
