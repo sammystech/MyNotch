@@ -454,6 +454,12 @@ final class SystemHUD {
         min(1, max(0, (v / step).rounded() * step))
     }
 
+    /// Clicked away: tuck the volume/brightness pill back in right now.
+    func dismissQuickly() {
+        hideWork?.cancel()
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.92)) { NotchState.shared.hud = nil }
+    }
+
     /// Show (or update) the island HUD, then tuck it away after a pause.
     static let dbg = ProcessInfo.processInfo.environment["MYNOTCH_HUDLOG"] == "1"
     static func log(_ m: String) {

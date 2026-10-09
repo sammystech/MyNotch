@@ -74,6 +74,12 @@ final class Toasts {
         withAnimation(NotchMotion.collapse) { NotchState.shared.toast = nil }
     }
 
+    /// Clicked away: a quick, snappy tuck back into the notch.
+    func dismissQuickly() {
+        hideWork?.cancel()
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.92)) { NotchState.shared.toast = nil }
+    }
+
     /// Clicking the toast jumps to the app it's about (Claude, Codex, …).
     func activate() {
         if let id = NotchState.shared.toast?.openBundle, let app = Self.appURL(id) {

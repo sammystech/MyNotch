@@ -447,7 +447,10 @@ final class NotchController {
     private func openPanel() {
         guard !state.expanded else { return }
         // A toast is showing: clicking it goes to its app (Claude), not the panel.
-        if state.toast != nil && state.hud == nil { Toasts.shared.activate(); return }
+        // Something's showing (a pop-up, notification, volume/brightness):
+        // the first click just clears it quickly; the next click opens.
+        if state.hud != nil { SystemHUD.shared.dismissQuickly(); return }
+        if state.toast != nil { Toasts.shared.dismissQuickly(); return }
         // No artificial haptic here — the trackpad's own click is the
         // feedback; adding .levelChange on top read as a hard double-click.
         withAnimation(Self.anim) {
@@ -534,7 +537,7 @@ final class NotchController {
                         self.panel.sendEvent(e)
                     }
                 }
-                FileHandle.standardError.write(String(format: "DEBUGCLICK %.3f released %@ -> selected=%@\n", CACurrentMediaTime(), "\(p)", "\(self.state.selected)").data(using: .utf8)!)
+                FileHandle.standardError.write(String(format: "DEBUGCLICK %.3f released %@ -> selected=%@ expanded=%@ toast=%@\n", CACurrentMediaTime(), "\(p)", "\(self.state.selected)", "\(self.state.expanded)", "\(self.state.toast != nil)").data(using: .utf8)!)
             }
         }
     }
