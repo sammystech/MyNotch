@@ -132,6 +132,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let env = ProcessInfo.processInfo.environment
         if env["MYNOTCH_PIN"] == "1" { NotchState.shared.debugPinned = true }
         if let keys = env["MYNOTCH_KEYS"] { SystemHUD.shared.runDebugKeys(keys) }
+        if let names = env["MYNOTCH_APPLOOKUP"] {
+            for n in names.split(separator: ",") {
+                FileHandle.standardError.write("LOOKUP \(n) -> \(NotificationMirror.appPath(named: String(n)) ?? "nil")\n".data(using: .utf8)!)
+            }
+        }
         // MYNOTCH_POWER="4:1,5:0,5.5:1,…" = at t seconds, fake AC on(1)/off(0).
         if let spec = env["MYNOTCH_POWER"] {
             for step in spec.split(separator: ",") {

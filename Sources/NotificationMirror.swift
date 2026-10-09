@@ -41,6 +41,11 @@ final class NotificationMirror {
         guard timer == nil else { return }
         attach()
         scan(announce: false)               // don't replay banners already up
+        // Build the app index in the background, hand it over on main.
+        DispatchQueue.global(qos: .utility).async {
+            let built = Self.makeIndex()
+            DispatchQueue.main.async { Self.index = built; Self.indexBuilt = true }
+        }
         // Safety net + queue pump. Scanning one small window is cheap.
         let t = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in
             self?.scan(announce: true)
@@ -163,22 +168,70 @@ final class NotificationMirror {
     }
 
     /// The app that posted it, by display name → its bundle path (for the icon).
+    /// Banners only carry the app's display name, which often differs from its
+    /// file name ("Discord" vs "Discord.app" in a subfolder, "WhatsApp" vs
+    /// "WhatsApp Desktop.app"…), so look it up in an index of every installed
+    /// app keyed by ALL its names.
     private static var pathCache: [String: String] = [:]
-    private static func appPath(named name: String) -> String? {
+    private static var index: [String: String] = [:]
+    private static var indexBuilt = false
+
+    static func appPath(named name: String) -> String? {
         guard !name.isEmpty else { return nil }
-        if let hit = pathCache[name] { return hit }
+        let key = name.lowercased()
+        if let hit = pathCache[key] { return hit }
         var found: String?
-        if let running = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == name }),
-           let url = running.bundleURL {
+        // Only real apps — not helper extensions running under the same name
+        // (Messages' assistant .appex lives inside Messages.app).
+        if let running = NSWorkspace.shared.runningApplications.first(where: {
+            $0.localizedName?.lowercased() == key
+                && $0.bundleURL?.pathExtension == "app"
+                && !($0.bundleURL?.path.contains(".app/") ?? true) }), let url = running.bundleURL {
             found = url.path
-        } else {
-            for dir in ["/Applications", "/System/Applications", "/System/Applications/Utilities",
-                        NSHomeDirectory() + "/Applications"] {
-                let p = "\(dir)/\(name).app"
-                if FileManager.default.fileExists(atPath: p) { found = p; break }
+        }
+        if found == nil {
+            if !indexBuilt { index = makeIndex(); indexBuilt = true }
+            found = index[key]
+                ?? index.first(where: { $0.key.hasPrefix(key) || key.hasPrefix($0.key) })?.value
+        }
+        if let found { pathCache[key] = found }
+        return found
+    }
+
+    /// Every .app (two levels deep, so suites in folders count) by display
+    /// name, bundle name and file name. ~1 ms per app; built once, lazily.
+    static func makeIndex() -> [String: String] {
+        var index: [String: String] = [:]
+        let fm = FileManager.default
+        let roots = ["/Applications", "/System/Applications", "/System/Applications/Utilities",
+                     "/System/Library/CoreServices", "/System/Library/CoreServices/Applications",
+                     NSHomeDirectory() + "/Applications", "/Applications/Utilities"]
+        func add(_ appPath: String) {
+            let file = ((appPath as NSString).lastPathComponent as NSString).deletingPathExtension
+            var names = [file]
+            if let info = NSDictionary(contentsOfFile: appPath + "/Contents/Info.plist") {
+                for k in ["CFBundleDisplayName", "CFBundleName"] {
+                    if let v = info[k] as? String { names.append(v) }
+                }
+            }
+            for n in names where !n.isEmpty {
+                let k = n.lowercased()
+                if index[k] == nil { index[k] = appPath }
             }
         }
-        if let found { pathCache[name] = found }
-        return found
+        for root in roots {
+            guard let items = try? fm.contentsOfDirectory(atPath: root) else { continue }
+            for item in items {
+                let path = root + "/" + item
+                if item.hasSuffix(".app") { add(path); continue }
+                // One level into folders (e.g. /Applications/Microsoft Office/…).
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue,
+                   let sub = try? fm.contentsOfDirectory(atPath: path) {
+                    for s in sub where s.hasSuffix(".app") { add(path + "/" + s) }
+                }
+            }
+        }
+        return index
     }
 }

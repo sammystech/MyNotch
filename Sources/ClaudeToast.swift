@@ -51,14 +51,17 @@ final class Toasts {
         return true
     }
 
+    static let dbg = ProcessInfo.processInfo.environment["MYNOTCH_TOASTLOG"] == "1"
+
     func show(title: String, subtitle: String, icon: String = "claude",
               sound: String? = "Ping", open: String? = nil, badge: String? = "check",
               tall: Bool = false, opensOnClick: Bool = false) {
+        if Self.dbg { FileHandle.standardError.write("TOASTSHOW\n".data(using: .utf8)!) }
         let s = NotchState.shared
         // Default click target: Claude for the Claude icon, the app itself for app: icons.
         let target = open ?? (icon == "claude" ? "com.anthropic.claudefordesktop"
                               : icon.hasPrefix("app:") ? String(icon.dropFirst(4)) : nil)
-        withAnimation(NotchMotion.morph) {
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.66)) {   // a lively pop out of the notch
             s.toast = ToastState(title: title, subtitle: subtitle, icon: icon, openBundle: target,
                                  badge: badge, tall: tall, opensOnClick: opensOnClick)
         }
@@ -208,22 +211,55 @@ struct ToastIslandContent: View {
                 .padding(.horizontal, 16)
                 .frame(maxHeight: .infinity)
         }
+        .overlay(Sheen().id(toast.id).allowsHitTesting(false))
     }
 
-    var row: some View {
+    /// Each element enters on its own beat — logo pops with a twist, title
+    /// and message rise out of a blur one after the other, the check bounces
+    /// in last. `.id` gives every new pop-up a fresh run of the choreography.
+    var row: some View { ToastRowView(toast: toast).id(toast.id) }
+}
+
+private struct ToastRowView: View {
+    let toast: ToastState
+    @StateObject private var go = AppearTrigger()
+
+    var body: some View {
         HStack(spacing: 11) {
             ToastIcon(icon: toast.icon)
+                .keyframeAnimator(initialValue: Pop(), trigger: go.fired) { v, p in
+                    v.scaleEffect(go.fired ? p.scale : 0.25)
+                        .rotationEffect(.degrees(go.fired ? p.angle : -14))
+                        .opacity(go.fired ? p.opacity : 0)
+                } keyframes: { _ in
+                    KeyframeTrack(\.scale) {
+                        LinearKeyframe(0.25, duration: 0.06)
+                        SpringKeyframe(1.18, duration: 0.24, spring: .snappy)
+                        SpringKeyframe(1.0, duration: 0.3, spring: .bouncy)
+                    }
+                    KeyframeTrack(\.angle) {
+                        LinearKeyframe(-14, duration: 0.06)
+                        SpringKeyframe(4, duration: 0.24)
+                        SpringKeyframe(0, duration: 0.3)
+                    }
+                    KeyframeTrack(\.opacity) {
+                        LinearKeyframe(0, duration: 0.06)
+                        LinearKeyframe(1, duration: 0.14)
+                    }
+                }
             VStack(alignment: .leading, spacing: 1.5) {
                 Text(toast.title)
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
+                    .modifier(Rise(delay: 0.12, go: go.fired))
                 if !toast.subtitle.isEmpty {
                     Text(toast.subtitle)
                         .font(.system(size: 10.5, weight: .medium))
                         .foregroundColor(.white.opacity(toast.tall ? 0.72 : 0.55))
                         .lineLimit(toast.tall ? 2 : 1)
                         .truncationMode(.middle)
+                        .modifier(Rise(delay: 0.2, go: go.fired))
                 }
             }
             Spacer(minLength: 6)
@@ -232,8 +268,78 @@ struct ToastIslandContent: View {
                     .font(.system(size: 15, weight: .semibold))
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(.black, Color(red: 0.2, green: 0.82, blue: 0.4))
+                    .keyframeAnimator(initialValue: Pop(scale: 0, angle: 0), trigger: go.fired) { v, p in
+                        v.scaleEffect(go.fired ? p.scale : 0).opacity(go.fired ? p.opacity : 0)
+                    } keyframes: { _ in
+                        KeyframeTrack(\.scale) {
+                            LinearKeyframe(0, duration: 0.3)
+                            SpringKeyframe(1.3, duration: 0.2, spring: .snappy)
+                            SpringKeyframe(1.0, duration: 0.3, spring: .bouncy)
+                        }
+                        KeyframeTrack(\.opacity) {
+                            LinearKeyframe(0, duration: 0.3)
+                            LinearKeyframe(1, duration: 0.1)
+                        }
+                    }
             }
         }
+        .onAppear { DispatchQueue.main.async { go.fired = true } }
+    }
+}
+
+/// Fires once, right after the view appears — keyframe animations are
+/// started by a trigger change (a "play once" without one never runs).
+final class AppearTrigger: ObservableObject { @Published var fired = false }
+
+private struct Pop {
+    var scale: CGFloat = 0.25
+    var angle: Double = -14
+    var opacity: Double = 0
+}
+
+/// Rise out of a blur after `delay`.
+private struct Rise: ViewModifier {
+    let delay: Double
+    let go: Bool
+    struct V { var y: CGFloat = 9; var blur: CGFloat = 6; var opacity: Double = 0 }
+    func body(content: Content) -> some View {
+        content.keyframeAnimator(initialValue: V(), trigger: go) { v, p in
+            v.offset(y: go ? p.y : 9).blur(radius: go ? p.blur : 6).opacity(go ? p.opacity : 0)
+        } keyframes: { _ in
+            KeyframeTrack(\.y) {
+                LinearKeyframe(9, duration: delay)
+                SpringKeyframe(0, duration: 0.42, spring: .smooth)
+            }
+            KeyframeTrack(\.blur) {
+                LinearKeyframe(6, duration: delay)
+                CubicKeyframe(0, duration: 0.3)
+            }
+            KeyframeTrack(\.opacity) {
+                LinearKeyframe(0, duration: delay)
+                CubicKeyframe(1, duration: 0.25)
+            }
+        }
+    }
+}
+
+/// One soft highlight that sweeps across the pill as it lands.
+private struct Sheen: View {
+    @StateObject private var go = AppearTrigger()
+    var body: some View {
+        GeometryReader { g in
+            LinearGradient(colors: [.clear, .white.opacity(0.11), .clear],
+                           startPoint: .leading, endPoint: .trailing)
+                .frame(width: g.size.width * 0.35)
+                .rotationEffect(.degrees(14))
+                .keyframeAnimator(initialValue: CGFloat(-0.5), trigger: go.fired) { v, x in
+                    v.offset(x: (go.fired ? x : -0.5) * g.size.width)
+                } keyframes: { _ in
+                    LinearKeyframe(-0.5, duration: 0.18)
+                    CubicKeyframe(1.3, duration: 0.75)
+                }
+        }
+        .clipped()
+        .onAppear { DispatchQueue.main.async { go.fired = true } }
     }
 }
 

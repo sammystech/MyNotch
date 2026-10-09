@@ -29,7 +29,9 @@ final class VolumeControl {
     private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     var onExternalChange: (() -> Void)?
     private var externalWork: DispatchWorkItem?
-    private var ourChangeUntil = Date.distantPast
+    // Starts in the future: registering the listeners at launch reports a
+    // "change" that flashed the volume pill on every launch/login.
+    private var ourChangeUntil = Date().addingTimeInterval(4)
 
     private static let mainVolume = kAudioHardwareServiceDeviceProperty_VirtualMainVolume
 
