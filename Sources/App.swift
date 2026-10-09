@@ -132,6 +132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let env = ProcessInfo.processInfo.environment
         if env["MYNOTCH_PIN"] == "1" { NotchState.shared.debugPinned = true }
         if let keys = env["MYNOTCH_KEYS"] { SystemHUD.shared.runDebugKeys(keys) }
+        // MYNOTCH_POWER="4:1,5:0,5.5:1,…" = at t seconds, fake AC on(1)/off(0).
+        if let spec = env["MYNOTCH_POWER"] {
+            for step in spec.split(separator: ",") {
+                let p = step.split(separator: ":"); guard p.count == 2, let t = Double(p[0]) else { continue }
+                DispatchQueue.main.asyncAfter(deadline: .now() + t) { SystemEvents.shared.simulatePower(p[1] == "1") }
+            }
+        }
         // MYNOTCH_OPENURL="mynotch://notify?…": deliver a URL in-process (tests).
         if let u = env["MYNOTCH_OPENURL"], let url = URL(string: u) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { Toasts.shared.handle(url) }

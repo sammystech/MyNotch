@@ -32,6 +32,11 @@ final class SystemEvents: NSObject {
     private var netWork: DispatchWorkItem?
     private var powerSource: CFRunLoopSource?
     private var onAC: Bool?
+    // Charger debounce: a flaky charger flickers off/on constantly. Only a
+    // real unplug (off for 5s+) re-arms the "Charging" pop-up.
+    private var chargerAnnounced = false
+    private var pendingUnplug: DispatchWorkItem?
+    private let unplugSettle: TimeInterval = 5
 
     func sync() {
         if Prefs.shared.deviceAlerts { start() } else { stop() }
@@ -66,9 +71,18 @@ final class SystemEvents: NSObject {
 
     private var quiet: Bool { Date() < quietUntil }
 
+    private var lastAlert: (key: String, at: Date)?
+
     private func alert(_ title: String, _ subtitle: String, _ symbol: String,
                        tint: String? = nil, check: Bool = false) {
         guard !quiet else { return }
+        // The same event often arrives twice (e.g. Bluetooth classic + LE).
+        let key = title + "|" + subtitle
+        if let last = lastAlert, last.key == key, Date().timeIntervalSince(last.at) < 4 { return }
+        lastAlert = (key, Date())
+        if ProcessInfo.processInfo.environment["MYNOTCH_EVENTLOG"] == "1" {
+            FileHandle.standardError.write(String(format: "ALERT %.2f %@ | %@\n", CACurrentMediaTime(), title, subtitle).data(using: .utf8)!)
+        }
         Toasts.shared.show(title: title, subtitle: subtitle,
                            icon: "device:" + symbol + (tint.map { "#" + $0 } ?? ""),
                            sound: nil, badge: check ? "check" : nil)
@@ -101,6 +115,9 @@ final class SystemEvents: NSObject {
             var id: UInt64 = 0
             IORegistryEntryGetRegistryEntryID(service, &id)
             guard let name = Self.usbName(service) else { continue }
+            // No pop-ups for phones/watches over USB either.
+            let lower = name.lowercased()
+            if lower.contains("iphone") || lower.contains("watch") { continue }
             usbNames[id] = name
             if announce { alert(name, "Connected", Self.usbSymbol(name), check: true) }
         }
@@ -172,12 +189,13 @@ final class SystemEvents: NSObject {
         alert(name, "Disconnected", symbol)
     }
 
-    /// Things that connect/disconnect constantly on their own and aren't worth
-    /// a pop-up — an Apple Watch reconnects every time it wakes.
+    /// Things that are always nearby and reconnect on their own — not worth a
+    /// pop-up: the user's iPhone and Apple Watch (user asked for both gone).
     private static func isIgnored(_ d: IOBluetoothDevice) -> Bool {
         let n = (d.name ?? "").lowercased()
-        return n.contains("apple watch") || n.contains("watch")
+        return n.contains("watch") || n.contains("iphone") || n.contains("phone")
             || d.deviceClassMajor == UInt32(kBluetoothDeviceClassMajorWearable)
+            || d.deviceClassMajor == UInt32(kBluetoothDeviceClassMajorPhone)
     }
 
     private static func isAudio(_ d: IOBluetoothDevice) -> Bool {
@@ -242,26 +260,55 @@ final class SystemEvents: NSObject {
         powerSource = src
         CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
         onAC = Self.isOnAC
+        chargerAnnounced = onAC == true      // already plugged in at launch: don't announce
     }
 
     private func powerChanged() {
         let ac = Self.isOnAC
+        if ProcessInfo.processInfo.environment["MYNOTCH_EVENTLOG"] == "1" {
+            FileHandle.standardError.write(String(format: "POWER %.2f ac=%@ was=%@ announced=%@\n", CACurrentMediaTime(), "\(ac)", "\(String(describing: onAC))", "\(chargerAnnounced)").data(using: .utf8)!)
+        }
         guard ac != onAC else { return }
         onAC = ac
         if ac {
+            // Back within 5s of dropping out = a glitch, not a new plug-in.
+            pendingUnplug?.cancel(); pendingUnplug = nil
+            guard !chargerAnnounced else { return }
+            chargerAnnounced = true
             // The adapter's details (watts, name) fill in a moment after the
             // plug goes in — wait for them, up to ~4s.
             announceCharger(attempt: 0)
         } else {
-            alert("On Battery", Self.batteryPercent.map { "\($0)%" } ?? "", Self.batterySymbol)
+            // Only a real unplug counts: still off after 5s → "On Battery",
+            // and the next plug-in will announce again.
+            pendingUnplug?.cancel()
+            let w = DispatchWorkItem { [weak self] in
+                guard let self, self.onAC == false else { return }
+                self.chargerAnnounced = false
+                self.alert("On Battery", Self.batteryPercent.map { "\($0)%" } ?? "", Self.batterySymbol)
+            }
+            pendingUnplug = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + unplugSettle, execute: w)
         }
     }
+
+    /// Test hook: feed fake AC on/off changes through the same logic.
+    func simulatePower(_ ac: Bool) {
+        guard ac != onAC else { return }
+        onAC = !ac
+        Self.forcedAC = ac
+        powerChanged()
+        Self.forcedAC = nil
+    }
+    private static var forcedAC: Bool?
 
     private func announceCharger(attempt: Int) {
         let info = Self.chargerInfo()
         if info.watts == nil && attempt < 8 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self, self.onAC == true else { return }
+                // Only a REAL unplug (5s settle) cancels this — a flicker
+                // while we wait for the wattage must not swallow the pop-up.
+                guard let self, self.chargerAnnounced else { return }
                 self.announceCharger(attempt: attempt + 1)
             }
             return
@@ -288,7 +335,10 @@ final class SystemEvents: NSObject {
             watts = (d[kIOPSPowerAdapterWattsKey] as? Int).flatMap { $0 > 0 ? $0 : nil }
         }
         let port = magSafeActive ? "MagSafe" : "USB-C"
-        let charging = (smartBattery("IsCharging") as? Bool) ?? true
+        // A flaky charger can catch IsCharging=false mid-dropout; only call it
+        // "on hold" where Optimized Charging actually holds (≈80%+).
+        let rawCharging = (smartBattery("IsCharging") as? Bool) ?? true
+        let charging = rawCharging || (batteryPercent ?? 100) < 79
         return (port, watts, charging)
     }
 
@@ -320,6 +370,7 @@ final class SystemEvents: NSObject {
     }
 
     private static var isOnAC: Bool {
+        if let forcedAC { return forcedAC }
         guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return true }
         let type = IOPSGetProvidingPowerSourceType(blob)?.takeUnretainedValue() as String?
         return type == kIOPMACPowerKey
