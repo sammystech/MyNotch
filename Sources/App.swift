@@ -147,6 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     NotchState.shared.dragActive = true
                     NotchState.shared.dropTarget = d == "airdrop" ? .airdrop : .tray
                 }
+                if env["MYNOTCH_EXTEND"] == "1" { NotchState.shared.extended = true }
                 // Animated, so the debug hook also exercises the real morph.
                 withAnimation(NotchMotion.morph) { NotchState.shared.expanded = true }
             }

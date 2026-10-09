@@ -61,6 +61,17 @@ struct SettingsPanel: View {
                     }
 
                     card {
+                        row("Claude Code Pop-ups", "sparkle", Color(red: 0.85, green: 0.47, blue: 0.34), $settings.claudePopups)
+                        separator
+                        row("Codex Pop-ups", "chevron.left.forwardslash.chevron.right", .indigo, $settings.codexPopups)
+                        Text("A ping and a pop-up from the notch when a conversation finishes.")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.45))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 30).padding(.bottom, 6)
+                    }
+
+                    card {
                         row("Music in the Notch", "music.note", .pink, $settings.musicIsland)
                         separator
                         row("Scratch Sound", "waveform", .orange, $settings.scratchSound)

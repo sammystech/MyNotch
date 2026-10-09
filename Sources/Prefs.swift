@@ -12,6 +12,8 @@ final class Prefs: ObservableObject {
     @Published var launchAtLogin: Bool { didSet { LoginItem.set(launchAtLogin) } }
     @Published var systemHUD: Bool { didSet { set(systemHUD, "prefSystemHUD"); SystemHUD.shared.sync() } }
     @Published var autoUpdate: Bool { didSet { set(autoUpdate, "prefAutoUpdate") } }
+    @Published var claudePopups: Bool { didSet { set(claudePopups, "prefClaudePopups") } }
+    @Published var codexPopups: Bool { didSet { set(codexPopups, "prefCodexPopups") } }
 
     private init() {
         let d = UserDefaults.standard
@@ -23,6 +25,8 @@ final class Prefs: ObservableObject {
         scratchSound  = flag("prefScratchSound")
         launchAtLogin = LoginItem.isEnabled
         systemHUD     = flag("prefSystemHUD")
+        claudePopups  = flag("prefClaudePopups")
+        codexPopups   = flag("prefCodexPopups")
         // Auto-update is ON for every new install, and forced on ONCE for
         // everyone moving to this version (even if they'd turned it off) —
         // after that, their choice sticks.

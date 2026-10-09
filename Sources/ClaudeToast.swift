@@ -29,9 +29,15 @@ final class Toasts {
     @discardableResult
     func handle(_ url: URL) -> Bool {
         guard url.scheme == "mynotch", url.host == "notify" else { return false }
-        let q = Dictionary(uniqueKeysWithValues:
+        let q = Dictionary(
             (URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? [])
-                .map { ($0.name, $0.value ?? "") })
+                .map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { _, last in last })
+        // Per-source switches in Settings (source=claude / source=codex).
+        switch q["source"] {
+        case "claude": if !Prefs.shared.claudePopups { return true }
+        case "codex":  if !Prefs.shared.codexPopups { return true }
+        default: break
+        }
         show(title: q["title"] ?? "Claude Code",
              subtitle: q["subtitle"] ?? "",
              icon: q["icon"] ?? "claude",
