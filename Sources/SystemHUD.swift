@@ -40,10 +40,41 @@ final class VolumeControl {
         var addr = Self.addr(kAudioHardwarePropertyDefaultOutputDevice, scope: kAudioObjectPropertyScopeGlobal)
         AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main) { [weak self] _, _ in
             guard let self else { return }
+            let old = self.device
             self.unwatch()
             self.device = Self.defaultOutput()
             self.watch()
+            guard self.device != old, self.device != 0 else { return }
+            // The switch also nudges the volume properties — don't let that
+            // flash the volume pill over the "connected" pop-up.
+            self.ourChangeUntil = Date().addingTimeInterval(1.5)
+            self.onDeviceChange?()
         }
+    }
+
+    /// Fired when the default output switches (e.g. AirPods connect).
+    var onDeviceChange: (() -> Void)?
+
+    var isHeadphones: Bool {
+        transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    private var transport: UInt32 {
+        var t = UInt32(0)
+        var a = Self.addr(kAudioDevicePropertyTransportType, scope: kAudioObjectPropertyScopeGlobal)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        AudioObjectGetPropertyData(device, &a, 0, nil, &size, &t)
+        return t
+    }
+
+    /// The output's name as macOS shows it ("Sam's AirPods Pro").
+    var deviceName: String {
+        var name: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var a = Self.addr(kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal)
+        guard AudioObjectGetPropertyData(device, &a, 0, nil, &size, &name) == noErr,
+              let n = name?.takeRetainedValue() else { return "Headphones" }
+        return n as String
     }
 
     /// False for outputs macOS can't set a level on (many HDMI/DisplayPort
@@ -87,15 +118,23 @@ final class VolumeControl {
 
     /// SF Symbol for what's playing out of: AirPods, a display, the Mac.
     var deviceSymbol: String {
-        var t = UInt32(0)
-        var a = Self.addr(kAudioDevicePropertyTransportType, scope: kAudioObjectPropertyScopeGlobal)
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        AudioObjectGetPropertyData(device, &a, 0, nil, &size, &t)
-        switch t {
-        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: return "airpodspro"
+        switch transport {
+        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
+            return Self.headphoneSymbol(for: deviceName)
         case kAudioDeviceTransportTypeHDMI, kAudioDeviceTransportTypeDisplayPort: return "tv"
         default: return "speaker"
         }
+    }
+
+    /// The SF Symbol for the exact model, by name — Apple ships a glyph for
+    /// each AirPods generation and for Beats.
+    static func headphoneSymbol(for name: String) -> String {
+        let n = name.lowercased()
+        if n.contains("airpods max") { return "airpodsmax" }
+        if n.contains("airpods pro") { return "airpodspro" }
+        if n.contains("airpods") { return n.contains("4") || n.contains("3") ? "airpods.gen3" : "airpods" }
+        if n.contains("beats") { return "beats.headphones" }
+        return "headphones"
     }
 
     // Changes from Control Center, AirPods, other apps → show the island too.
@@ -319,6 +358,11 @@ final class SystemHUD {
 
     private init() {
         tap.handler = { [weak self] key, down, rep, fine in self?.handle(key, down: down, repeat: rep, fine: fine) ?? false }
+        volume.onDeviceChange = { [weak self] in
+            guard let self, self.volume.isHeadphones else { return }
+            Toasts.shared.show(title: self.volume.deviceName, subtitle: "Connected",
+                               icon: "device:" + self.volume.deviceSymbol, sound: nil)
+        }
         volume.onExternalChange = { [weak self] in
             guard let self, Prefs.shared.systemHUD else { return }
             Self.log("external volume change")
@@ -471,7 +515,7 @@ struct HUDIslandContent: View {
             return hud.level < 0.34 ? "sun.min.fill" : "sun.max.fill"
         }
         if hud.muted { return "speaker.slash.fill" }
-        if hud.device == "airpodspro" { return "airpodspro" }
+        if hud.device != "speaker" && hud.device != "tv" { return hud.device }   // AirPods model, Beats…
         return "speaker.wave.3.fill"
     }
 
@@ -479,12 +523,15 @@ struct HUDIslandContent: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // Larger, with hierarchical shading so AirPods/speaker glyphs read
+            // as real objects instead of flat 11pt marks.
             Image(systemName: symbol, variableValue: hud.kind == .volume && !hud.muted ? hud.level : 1)
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundColor(.white.opacity(hud.muted ? 0.55 : 1))
-                .frame(width: 20)
+                .font(.system(size: 15, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.white.opacity(hud.muted ? 0.55 : 1))
+                .frame(width: 26, height: 22)
                 .contentTransition(.symbolEffect(.replace))
-                .padding(.leading, 12)
+                .padding(.leading, 10)
             Spacer(minLength: notchGap == 0 ? 12 : notchGap)
             HStack(spacing: 6) {
                 GeometryReader { g in

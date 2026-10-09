@@ -138,7 +138,15 @@ private let claudeCoral = Color(red: 0.85, green: 0.47, blue: 0.34)
 private struct ToastIcon: View {
     let icon: String
     var body: some View {
-        if icon.hasPrefix("app:"), let img = Toasts.appIcon(String(icon.dropFirst(4))) {
+        if icon.hasPrefix("device:") {
+            // Hardware (AirPods, Beats…): a big, crisp glyph, no tile — like
+            // the iPhone's connection pop-up.
+            Image(systemName: String(icon.dropFirst(7)))
+                .font(.system(size: 26, weight: .regular))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+        } else if icon.hasPrefix("app:"), let img = Toasts.appIcon(String(icon.dropFirst(4))) {
             // The app's own icon already has its shape and depth.
             Image(nsImage: img).resizable().interpolation(.high)
                 .frame(width: 32, height: 32)
