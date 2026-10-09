@@ -450,7 +450,7 @@ final class NotchController {
         // Something's showing (a pop-up, notification, volume/brightness):
         // the first click just clears it quickly; the next click opens.
         if state.hud != nil { SystemHUD.shared.dismissQuickly(); return }
-        if state.toast != nil { Toasts.shared.dismissQuickly(); return }
+        if state.toast != nil { Toasts.shared.clicked(); return }
         // No artificial haptic here — the trackpad's own click is the
         // feedback; adding .levelChange on top read as a hard double-click.
         withAnimation(Self.anim) {

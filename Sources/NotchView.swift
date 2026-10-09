@@ -192,7 +192,7 @@ struct NotchRootView: View {
                     .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.7))
                     .shadow(color: .black.opacity(0.6), radius: 12, y: 4)
                     .padding(.bottom, 28)
-                    .onTapGesture { Toasts.shared.dismissQuickly() }
+                    .onTapGesture { Toasts.shared.clicked() }
                     .transition(.scale(scale: 0.8).combined(with: .opacity))
                     .zIndex(3)
             } else if let hud = state.hud {

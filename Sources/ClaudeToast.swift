@@ -19,6 +19,7 @@ struct ToastState: Equatable {
     var openBundle: String?            // app to bring forward when the toast is clicked
     var badge: String? = "check"       // trailing mark; nil = none
     var tall = false                   // notifications: room for a 2-line message
+    var opensOnClick = false           // Claude/Codex: a click jumps to the app
     var id = UUID()
 }
 
@@ -45,20 +46,21 @@ final class Toasts {
              icon: q["icon"] ?? "claude",
              sound: q["sound"] ?? "Ping",
              open: q["open"],
-             badge: q["badge"] ?? "check")
+             badge: q["badge"] ?? "check",
+             opensOnClick: q["source"] == "claude" || q["source"] == "codex" || q["icon"] == "claude")
         return true
     }
 
     func show(title: String, subtitle: String, icon: String = "claude",
               sound: String? = "Ping", open: String? = nil, badge: String? = "check",
-              tall: Bool = false) {
+              tall: Bool = false, opensOnClick: Bool = false) {
         let s = NotchState.shared
         // Default click target: Claude for the Claude icon, the app itself for app: icons.
         let target = open ?? (icon == "claude" ? "com.anthropic.claudefordesktop"
                               : icon.hasPrefix("app:") ? String(icon.dropFirst(4)) : nil)
         withAnimation(NotchMotion.morph) {
             s.toast = ToastState(title: title, subtitle: subtitle, icon: icon, openBundle: target,
-                                 badge: badge, tall: tall)
+                                 badge: badge, tall: tall, opensOnClick: opensOnClick)
         }
         if let sound, !sound.isEmpty, let snd = NSSound(named: NSSound.Name(sound)) {
             snd.stop(); snd.play()
@@ -72,6 +74,12 @@ final class Toasts {
     func dismiss() {
         hideWork?.cancel()
         withAnimation(NotchMotion.collapse) { NotchState.shared.toast = nil }
+    }
+
+    /// A click on a pop-up: Claude/Codex open their app; everything else
+    /// just tucks away (the next click opens the island).
+    func clicked() {
+        if NotchState.shared.toast?.opensOnClick == true { activate() } else { dismissQuickly() }
     }
 
     /// Clicked away: a quick, snappy tuck back into the notch.
