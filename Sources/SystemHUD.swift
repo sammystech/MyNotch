@@ -135,7 +135,11 @@ final class VolumeControl {
         if n.contains("airpods max") { return "airpodsmax" }
         if n.contains("airpods pro") { return "airpodspro" }
         if n.contains("airpods") { return n.contains("4") || n.contains("3") ? "airpods.gen3" : "airpods" }
-        if n.contains("beats") { return "beats.headphones" }
+        if n.contains("beats") && !n.contains("pill") { return "beats.headphones" }
+        // Speakers and soundbars aren't headphones.
+        let speakers = ["speaker", "soundbar", "sound bar", "jbl", "sonos", "bose soundlink", "charge", "flip",
+                        "boom", "megaboom", "homepod", "vizio", "sb36", "beats pill", "marshall", "ue "]
+        if speakers.contains(where: { n.contains($0) }) { return "hifispeaker.fill" }
         return "headphones"
     }
 

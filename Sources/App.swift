@@ -135,6 +135,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let keys = env["MYNOTCH_KEYS"] { SystemHUD.shared.runDebugKeys(keys) }
         // MYNOTCH_TAPTEST=1: exercise the media-key pairing logic with a
         // counting stub (no real volume change), print results, quit.
+        if env["MYNOTCH_BTLIST"] == "1" {
+            for l in SystemEvents.describePaired() { FileHandle.standardError.write(("BT " + l + "\n").data(using: .utf8)!) }
+            exit(0)
+        }
         if env["MYNOTCH_TAPTEST"] == "1" {
             let t = MediaKeyTap(); var calls = 0
             t.handler = { _, _, _, _ in calls += 1; return true }

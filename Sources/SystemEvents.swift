@@ -176,16 +176,19 @@ final class SystemEvents: NSObject {
             btDisconnects.append(d)
         }
         // Headphones are announced by the audio switch (with the model glyph).
-        guard !Self.isAudio(device), !Self.isIgnored(device) else { return }
-        alert(device.name ?? "Bluetooth Device", "Connected", Self.btSymbol(device), check: true)
+        guard !Self.isAudio(device), !Self.isIgnored(device),
+              let name = Self.realName(device), let symbol = Self.btSymbol(device) else { return }
+        alert(name, "Connected", symbol, check: true)
     }
 
     @objc private func btDisconnected(_ note: IOBluetoothUserNotification, device: IOBluetoothDevice) {
         note.unregister()
         btDisconnects.removeAll { $0 === note }
-        guard !Self.isIgnored(device) else { return }
-        let name = device.name ?? "Bluetooth Device"
-        let symbol = Self.isAudio(device) ? VolumeControl.headphoneSymbol(for: name) : Self.btSymbol(device)
+        guard !Self.isIgnored(device), let name = Self.realName(device) else { return }
+        // Only things we recognise: headphones (AirPods, Beats…) or a named
+        // keyboard/mouse/trackpad/controller — never a generic "Bluetooth Device".
+        guard let symbol = Self.isAudio(device) ? VolumeControl.headphoneSymbol(for: name)
+                                                : Self.btSymbol(device) else { return }
         alert(name, "Disconnected", symbol)
     }
 
@@ -193,16 +196,43 @@ final class SystemEvents: NSObject {
     /// pop-up: the user's iPhone and Apple Watch (user asked for both gone).
     private static func isIgnored(_ d: IOBluetoothDevice) -> Bool {
         let n = (d.name ?? "").lowercased()
-        return n.contains("watch") || n.contains("iphone") || n.contains("phone")
+        // "phone" as a WORD only — "headphones" must not count as a phone.
+        let phone = n.range(of: "\\bphone\\b", options: .regularExpression) != nil
+        return n.contains("watch") || n.contains("iphone") || phone
             || d.deviceClassMajor == UInt32(kBluetoothDeviceClassMajorWearable)
             || d.deviceClassMajor == UInt32(kBluetoothDeviceClassMajorPhone)
+    }
+
+    /// Test hook: what each paired device would show (MYNOTCH_BTLIST=1).
+    static func describePaired() -> [String] {
+        (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []).map { d in
+            let name = realName(d)
+            let symbol: String? = isIgnored(d) ? nil
+                : isAudio(d) ? name.map { VolumeControl.headphoneSymbol(for: $0) } : btSymbol(d)
+            let verdict = (name != nil && symbol != nil && !isIgnored(d)) ? "POP-UP (\(symbol!))" : "silent"
+            return "\(d.name ?? "<no name>") [class \(d.deviceClassMajor)/\(d.deviceClassMinor)] -> \(verdict)"
+        }
+    }
+
+    /// The device's own name, or nil for unnamed/placeholder ones (which were
+    /// the source of the vague "Bluetooth Device" pop-ups).
+    private static func realName(_ d: IOBluetoothDevice) -> String? {
+        guard let n = d.name?.trimmingCharacters(in: .whitespaces), !n.isEmpty else { return nil }
+        let l = n.lowercased()
+        if l == "bluetooth device" || l.hasPrefix("unknown") || l.range(of: "^[0-9a-f]{2}([-:][0-9a-f]{2}){5}$",
+                                                                       options: .regularExpression) != nil {
+            return nil
+        }
+        return n
     }
 
     private static func isAudio(_ d: IOBluetoothDevice) -> Bool {
         d.deviceClassMajor == UInt32(kBluetoothDeviceClassMajorAudio)
     }
 
-    private static func btSymbol(_ d: IOBluetoothDevice) -> String {
+    /// An icon for a device we recognise — nil means "not something worth a
+    /// pop-up" (unknown gadgets, cars, beacons…).
+    private static func btSymbol(_ d: IOBluetoothDevice) -> String? {
         let n = (d.name ?? "").lowercased()
         if n.contains("trackpad") { return "rectangle.and.hand.point.up.left" }
         if n.contains("mouse") { return "magicmouse" }
@@ -212,10 +242,14 @@ final class SystemEvents: NSObject {
         if n.contains("watch") { return "applewatch" }
         if n.contains("iphone") { return "iphone" }
         switch d.deviceClassMajor {
-        case UInt32(kBluetoothDeviceClassMajorPeripheral): return "keyboard"
-        case UInt32(kBluetoothDeviceClassMajorPhone): return "iphone"
-        case UInt32(kBluetoothDeviceClassMajorAudio): return "headphones"
-        default: return "dot.radiowaves.left.and.right"
+        case UInt32(kBluetoothDeviceClassMajorPeripheral):
+            // Keyboards/mice/trackpads report the Peripheral class; the minor
+            // class says which (bits: 0x10 keyboard, 0x20 pointing device).
+            let minor = d.deviceClassMinor
+            if minor & 0x20 != 0 { return "computermouse" }
+            if minor & 0x10 != 0 { return "keyboard" }
+            return "gamecontroller"
+        default: return nil
         }
     }
 
