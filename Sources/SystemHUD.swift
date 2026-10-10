@@ -262,12 +262,25 @@ final class BrightnessControl {
 // MARK: Media-key tap
 
 final class MediaKeyTap {
-    enum Key { case volumeUp, volumeDown, mute, brightnessUp, brightnessDown }
+    enum Key: Hashable { case volumeUp, volumeDown, mute, brightnessUp, brightnessDown }
     /// (key, isKeyDown, isRepeat, fineStep) → true = swallow (we handled it).
+    /// Called on the tap's own thread — must be quick and thread-safe.
     var handler: ((Key, Bool, Bool, Bool) -> Bool)?
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
+    private var thread: Thread?
+    private var runLoop: CFRunLoop?
     var isRunning: Bool { tap != nil }
+
+    // Tap-thread state (only touched inside handle()).
+    /// Keys whose key-DOWN we swallowed. Only their key-UP may be swallowed;
+    /// any other key-up goes through to macOS. If macOS ever saw a down and
+    /// not its up, it believes the key is HELD and auto-repeats it forever —
+    /// that was the "volume keeps going down by itself" bug.
+    private var swallowedDowns = Set<Key>()
+    /// Runaway guard: repeats seen for the current press.
+    private var repeatCount: [Key: Int] = [:]
+    private let maxRepeats = 40
 
     @discardableResult
     func start() -> Bool {
@@ -285,23 +298,50 @@ final class MediaKeyTap {
                                         userInfo: Unmanaged.passUnretained(self).toOpaque())
         else { return false }
         tap = t
-        source = CFMachPortCreateRunLoopSource(nil, t, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: t, enable: true)
+        let src = CFMachPortCreateRunLoopSource(nil, t, 0)
+        source = src
+        // The tap runs on its OWN thread. On the main thread, any moment the
+        // app was busy made macOS time the tap out and deliver a key-down to
+        // the system — while we still swallowed the matching key-up.
+        let th = Thread { [weak self] in
+            self?.runLoop = CFRunLoopGetCurrent()
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)
+            CGEvent.tapEnable(tap: t, enable: true)
+            CFRunLoopRun()
+        }
+        th.name = "MyNotch.media-keys"
+        th.qualityOfService = .userInteractive
+        th.start()
+        thread = th
         return true
     }
 
     func stop() {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
-        if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
-        tap = nil; source = nil
+        if let runLoop { CFRunLoopStop(runLoop) }
+        tap = nil; source = nil; thread = nil; runLoop = nil
+    }
+
+    /// Test hook: push a synthetic media-key event through handle().
+    /// Returns true if it would be swallowed (not seen by macOS).
+    func testFeed(code: Int, down: Bool, repeat r: Bool, timeout: Bool = false) -> Bool {
+        let data1 = (code << 16) | ((down ? 0xA : 0xB) << 8) | (r ? 1 : 0)
+        guard let ev = NSEvent.otherEvent(with: .systemDefined, location: .zero, modifierFlags: [],
+                                          timestamp: 0, windowNumber: 0, context: nil,
+                                          subtype: 8, data1: data1, data2: -1)?.cgEvent else { return false }
+        let type: CGEventType = timeout ? .tapDisabledByTimeout : CGEventType(rawValue: 14)!
+        return handle(type, ev) == nil
     }
 
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
         let pass = Unmanaged.passUnretained(event)
-        // macOS pauses a tap it thinks is slow; just turn it back on.
+        // macOS paused the tap. Turn it back on, and forget what we swallowed:
+        // during the gap the system may have seen downs, so from here every
+        // key-up passes through and nothing can be left "held".
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            swallowedDowns.removeAll()
+            repeatCount.removeAll()
             return pass
         }
         let fine = event.flags.contains(.maskShift) && event.flags.contains(.maskAlternate)
@@ -331,7 +371,34 @@ final class MediaKeyTap {
             isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
         }
         guard let key, let handler else { return pass }
-        return handler(key, down, isRepeat, fine) ? nil : pass
+
+        if !down {
+            repeatCount[key] = nil
+            // Only swallow an up whose down we swallowed — otherwise macOS
+            // needs it to stop its own key repeat.
+            guard swallowedDowns.remove(key) != nil else { return pass }
+            _ = handler(key, false, false, fine)
+            return nil
+        }
+
+        if isRepeat {
+            // A repeat of a press macOS owns: leave it to macOS.
+            guard swallowedDowns.contains(key) else { return pass }
+            let n = (repeatCount[key] ?? 0) + 1
+            repeatCount[key] = n
+            // Runaway guard: a "held" key that never lets go stops counting.
+            if n > maxRepeats { return nil }
+            _ = handler(key, true, true, fine)
+            return nil
+        }
+
+        repeatCount[key] = 0
+        if handler(key, true, false, fine) {
+            swallowedDowns.insert(key)
+            return nil
+        }
+        swallowedDowns.remove(key)
+        return pass
     }
 }
 
@@ -402,6 +469,8 @@ final class SystemHUD {
     }
 
     // Runs inside the event tap callback: decide fast, do the work right after.
+    /// Runs on the media-key tap's own thread (see MediaKeyTap). Decide fast,
+    /// then do the actual work on the main thread.
     private func handle(_ key: MediaKeyTap.Key, down: Bool, repeat isRepeat: Bool, fine: Bool) -> Bool {
         guard Prefs.shared.systemHUD else { return false }
         switch key {
@@ -417,6 +486,7 @@ final class SystemHUD {
                 return true
             }
             if key == .mute && isRepeat { return true }
+            if key != .mute { adjustedVolume = true }   // tap-thread only
             DispatchQueue.main.async { self.applyVolume(key, fine: fine) }
             return true
         case .brightnessUp, .brightnessDown:
@@ -436,10 +506,8 @@ final class SystemHUD {
             volume.set(muted: !volume.muted)
         case .volumeUp:
             volume.set(volume: Self.snap(volume.volume + step, step))
-            adjustedVolume = true
         default:
             volume.set(volume: Self.snap(volume.volume - step, step))
-            adjustedVolume = true
         }
         show(.volume)
     }
@@ -456,6 +524,47 @@ final class SystemHUD {
         min(1, max(0, (v / step).rounded() * step))
     }
 
+    // MARK: Dragging the slider
+
+    private(set) var dragging = false
+
+    /// Set the level straight from the slider (click or drag), keeping the
+    /// pill out until the finger lifts.
+    func drag(to fraction: Double) {
+        guard let hud = NotchState.shared.hud else { return }
+        if !dragging { dragging = true; hideWork?.cancel() }
+        let f = min(1, max(0, fraction))
+        switch hud.kind {
+        case .volume:
+            volume.set(volume: f)
+            if f > 0.001, volume.muted { volume.set(muted: false) }
+            NotchState.shared.hud = HUDState(kind: .volume, level: f, muted: f <= 0.001, device: hud.device)
+        case .brightness:
+            brightness.set(brightness: f)
+            NotchState.shared.hud = HUDState(kind: .brightness, level: f)
+        }
+    }
+
+    func endDrag() {
+        guard dragging else { return }
+        dragging = false
+        if NotchState.shared.hud?.kind == .volume,
+           UserDefaults(suiteName: ".GlobalPreferences")?.integer(forKey: "com.apple.sound.beep.feedback") == 1 {
+            feedback?.stop(); feedback?.play()      // the macOS volume "pop", like its own slider
+        }
+        scheduleHide()
+    }
+
+    private func scheduleHide() {
+        hideWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard self?.dragging == false else { return }
+            withAnimation(NotchMotion.collapse) { NotchState.shared.hud = nil }
+        }
+        hideWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + holdTime, execute: w)
+    }
+
     /// Clicked away: tuck the volume/brightness pill back in right now.
     func dismissQuickly() {
         hideWork?.cancel()
@@ -469,6 +578,7 @@ final class SystemHUD {
     }
 
     func show(_ kind: HUDKind, level: Double? = nil) {
+        if dragging { return }       // the slider is in charge right now
         let s = NotchState.shared
         let new: HUDState = kind == .volume
             ? HUDState(kind: .volume, level: volume.volume, muted: volume.muted || volume.volume <= 0.001,
@@ -480,13 +590,7 @@ final class SystemHUD {
             withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) { s.hud = new }  // bar glides
         }
         Self.log("show \(kind) level=\(new.level) muted=\(new.muted)")
-        hideWork?.cancel()
-        let w = DispatchWorkItem {
-            Self.log("hide")
-            withAnimation(NotchMotion.collapse) { s.hud = nil }
-        }
-        hideWork = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + holdTime, execute: w)
+        scheduleHide()
     }
 
     /// Debug: drive the HUD without the event tap (MYNOTCH_KEYS="volup,volup,bridown").
@@ -542,23 +646,33 @@ struct HUDIslandContent: View {
                 .padding(.leading, 10)
             Spacer(minLength: notchGap == 0 ? 12 : notchGap)
             HStack(spacing: 6) {
+                // Click or drag the slider to set the level directly. The
+                // visible bar is 6pt; the grab area is the full island height.
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.18))
+                        Capsule().fill(Color.white.opacity(0.2))
                         Capsule()
                             .fill(Color.white)
-                            .frame(width: max(3.5, g.size.width * CGFloat(shown)))
+                            .frame(width: max(6, g.size.width * CGFloat(shown)))
                             .opacity(hud.muted ? 0 : 1)
                     }
+                    .frame(height: 6)
+                    .frame(maxHeight: .infinity, alignment: .center)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { v in SystemHUD.shared.drag(to: Double(v.location.x / g.size.width)) }
+                            .onEnded { _ in SystemHUD.shared.endDrag() }
+                    )
                 }
-                .frame(width: 34, height: 3.5)
+                .frame(width: 48)
                 // One line, always — "100" used to wrap onto two lines.
                 Text("\(Int(shown * 100 + 0.5))")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundColor(.white.opacity(0.75))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundColor(.white.opacity(0.85))
                     .lineLimit(1)
                     .fixedSize()
-                    .frame(width: 21, alignment: .trailing)
+                    .frame(width: 26, alignment: .trailing)
                     .contentTransition(.numericText())
             }
             .padding(.trailing, 11)

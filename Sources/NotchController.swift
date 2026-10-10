@@ -89,7 +89,12 @@ final class HitContainerView: NSView {
         if NotchState.shared.fileDragArmed { return self }
         // Collapsed: the whole notch is one button — take the event ourselves
         // so mouseDown opens the panel. Open: let SwiftUI's controls have it.
-        return NotchState.shared.expanded ? super.hitTest(point) : self
+        // Exception: the volume/brightness pill's right wing is a live slider.
+        let s = NotchState.shared
+        if !s.expanded, s.hud != nil, point.x > bounds.midX + s.notchSize.width / 2 {
+            return super.hitTest(point)
+        }
+        return s.expanded ? super.hitTest(point) : self
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -539,6 +544,31 @@ final class NotchController {
                 }
                 FileHandle.standardError.write(String(format: "DEBUGCLICK %.3f released %@ -> selected=%@ expanded=%@ toast=%@\n", CACurrentMediaTime(), "\(p)", "\(self.state.selected)", "\(self.state.expanded)", "\(self.state.toast != nil)").data(using: .utf8)!)
             }
+        }
+    }
+
+    /// Test hook: MYNOTCH_HUDDRAG="0.2>0.8" drags the volume/brightness
+    /// slider from 20% to 80% of its width (3s after launch), like a finger.
+    func runHUDDrag(_ spec: String) {
+        let parts = spec.split(separator: ">").compactMap { Double($0) }
+        guard parts.count == 2 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.2) { [weak self] in
+            guard let self else { return }
+            let nw = self.state.notchSize.width
+            let barX = self.panel.frame.width / 2 + nw / 2 + self.state.hudWing - 11 - 26 - 6 - 48
+            func send(_ type: NSEvent.EventType, _ f: Double) {
+                let loc = NSPoint(x: barX + 48 * f, y: self.panel.frame.height - 16)
+                if let e = NSEvent.mouseEvent(with: type, location: loc, modifierFlags: [],
+                                              timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: self.panel.windowNumber, context: nil,
+                                              eventNumber: 0, clickCount: 1, pressure: 1) {
+                    self.panel.sendEvent(e)
+                }
+            }
+            send(.leftMouseDown, parts[0])
+            for k in 1...10 { send(.leftMouseDragged, parts[0] + (parts[1] - parts[0]) * Double(k) / 10) }
+            send(.leftMouseUp, parts[1])
+            FileHandle.standardError.write("HUDDRAG done level=\(self.state.hud?.level ?? -1)\n".data(using: .utf8)!)
         }
     }
 

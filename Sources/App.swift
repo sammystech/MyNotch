@@ -75,7 +75,7 @@ final class NotchState: ObservableObject {
     // music island (wings), grown slightly while peeking.
     // The volume/brightness pill stays LEVEL with the notch (no drop):
     // icon in the left wing, level bar + number in the right wing.
-    let hudWing: CGFloat = 74
+    let hudWing: CGFloat = 96
     let hudDrop: CGFloat = 0
 
     let toastWing: CGFloat = 70
@@ -118,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller = NotchController()
         controller.show()
         if let spec = ProcessInfo.processInfo.environment["MYNOTCH_CLICKAT"] { controller.runDebugClicks(spec) }
+        if let spec = ProcessInfo.processInfo.environment["MYNOTCH_HUDDRAG"] { controller.runHUDDrag(spec) }
         setupStatusItem()
         // SMAppService register/status are synchronous XPC round trips to the
         // launch-services daemon — slow right after a reboot, which is exactly
@@ -132,6 +133,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let env = ProcessInfo.processInfo.environment
         if env["MYNOTCH_PIN"] == "1" { NotchState.shared.debugPinned = true }
         if let keys = env["MYNOTCH_KEYS"] { SystemHUD.shared.runDebugKeys(keys) }
+        // MYNOTCH_TAPTEST=1: exercise the media-key pairing logic with a
+        // counting stub (no real volume change), print results, quit.
+        if env["MYNOTCH_TAPTEST"] == "1" {
+            let t = MediaKeyTap(); var calls = 0
+            t.handler = { _, _, _, _ in calls += 1; return true }
+            func line(_ s: String) { FileHandle.standardError.write((s + "\n").data(using: .utf8)!) }
+            let vd = 1   // volume-down
+            // A: normal press, 3 repeats, release — all ours.
+            var a = [t.testFeed(code: vd, down: true, repeat: false)]
+            for _ in 0..<3 { a.append(t.testFeed(code: vd, down: true, repeat: true)) }
+            a.append(t.testFeed(code: vd, down: false, repeat: false))
+            line("A normal press  swallowed=\(a)  (want all true)")
+            // B: the bug — down swallowed, tap times out, then the release.
+            _ = t.testFeed(code: vd, down: true, repeat: false)
+            _ = t.testFeed(code: vd, down: true, repeat: false, timeout: true)
+            let bUp = t.testFeed(code: vd, down: false, repeat: false)
+            line("B up after timeout swallowed=\(bUp)  (want false: macOS must see it)")
+            // C: a stray release with no press we handled.
+            line("C stray up      swallowed=\(t.testFeed(code: vd, down: false, repeat: false))  (want false)")
+            // D: runaway — 60 repeats without a release.
+            calls = 0
+            _ = t.testFeed(code: vd, down: true, repeat: false)
+            for _ in 0..<60 { _ = t.testFeed(code: vd, down: true, repeat: true) }
+            line("D 1 press + 60 repeats -> volume steps taken: \(calls)  (want <= 41)")
+            _ = t.testFeed(code: vd, down: false, repeat: false)
+            exit(0)
+        }
         if let names = env["MYNOTCH_APPLOOKUP"] {
             for n in names.split(separator: ",") {
                 FileHandle.standardError.write("LOOKUP \(n) -> \(NotificationMirror.appPath(named: String(n)) ?? "nil")\n".data(using: .utf8)!)

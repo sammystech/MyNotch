@@ -23,9 +23,14 @@ final class NotificationMirror {
     private static let ncBundleID = "com.apple.notificationcenterui"
     private var timer: Timer?
     private var observer: AXObserver?
-    private var ncPid: pid_t = 0
-    private var seen = Set<String>()
-    private var queue: [Item] = []
+    private var ncPid: pid_t = 0             // main thread
+    private var queue: [Item] = []           // main thread
+    private var scanPending = false          // main thread
+    // All Accessibility calls happen here, never on the main thread: a slow
+    // or busy Notification Center can block an AX call, and on main that
+    // stalled the whole app (and the media-key handling with it).
+    private let axQueue = DispatchQueue(label: "MyNotch.notification-mirror", qos: .userInitiated)
+    private var seen = Set<String>()         // axQueue only
 
     struct Item {
         let app: String
@@ -40,15 +45,15 @@ final class NotificationMirror {
     private func start() {
         guard timer == nil else { return }
         attach()
-        scan(announce: false)               // don't replay banners already up
+        requestScan(announce: false)        // don't replay banners already up
         // Build the app index in the background, hand it over on main.
         DispatchQueue.global(qos: .utility).async {
             let built = Self.makeIndex()
             DispatchQueue.main.async { Self.index = built; Self.indexBuilt = true }
         }
-        // Safety net + queue pump. Scanning one small window is cheap.
+        // Safety net + queue pump.
         let t = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in
-            self?.scan(announce: true)
+            self?.requestScan(announce: true)
             self?.pump()
         }
         RunLoop.main.add(t, forMode: .common)
@@ -72,10 +77,11 @@ final class NotificationMirror {
         let cb: AXObserverCallback = { _, _, _, refcon in
             guard let refcon else { return }
             let me = Unmanaged<NotificationMirror>.fromOpaque(refcon).takeUnretainedValue()
-            DispatchQueue.main.async { me.scan(announce: true); me.pump() }
+            DispatchQueue.main.async { me.requestScan(announce: true) }
         }
         guard AXObserverCreate(ncPid, cb, &obs) == .success, let obs else { return }
         let app = AXUIElementCreateApplication(ncPid)
+        AXUIElementSetMessagingTimeout(app, 0.25)
         let me = Unmanaged.passUnretained(self).toOpaque()
         for n in [kAXWindowCreatedNotification, kAXCreatedNotification, kAXLayoutChangedNotification] {
             AXObserverAddNotification(obs, app, n as CFString, me)
@@ -91,15 +97,32 @@ final class NotificationMirror {
         observer = nil
     }
 
-    private func scan(announce: Bool) {
-        guard AXIsProcessTrusted() else { return }
-        // Notification Center restarts occasionally — follow it.
-        if let nc = NSRunningApplication.runningApplications(withBundleIdentifier: Self.ncBundleID).first,
-           nc.processIdentifier != ncPid {
-            detach(); attach()
+    /// Main thread: kick off one background scan (never more than one at once).
+    private func requestScan(announce: Bool) {
+        guard !scanPending, AXIsProcessTrusted() else { return }
+        scanPending = true
+        let pid = ncPid
+        let hide = Prefs.shared.hideSystemBanners
+        axQueue.async { [weak self] in
+            guard let self else { return }
+            // Notification Center restarts occasionally — notice, and re-attach on main.
+            let current = NSRunningApplication.runningApplications(withBundleIdentifier: Self.ncBundleID)
+                .first?.processIdentifier ?? 0
+            let items = (current != 0 && current == pid) ? self.scan(pid: pid, announce: announce, hide: hide) : []
+            DispatchQueue.main.async {
+                self.scanPending = false
+                if current != 0 && current != self.ncPid { self.detach(); self.attach() }
+                self.queue.append(contentsOf: items)
+                self.pump()
+            }
         }
-        guard ncPid != 0 else { return }
-        let app = AXUIElementCreateApplication(ncPid)
+    }
+
+    /// axQueue: read new banners (and close them if asked).
+    private func scan(pid: pid_t, announce: Bool, hide: Bool) -> [Item] {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.25)      // a stuck NC can't hold us up
+        var found: [Item] = []
         for window in Self.children(app) where Self.string(window, kAXTitleAttribute) == "Notification Center" {
             for banner in Self.banners(in: window, depth: 0) {
                 let id = Self.string(banner, kAXIdentifierAttribute) ?? Self.string(banner, kAXDescriptionAttribute) ?? ""
@@ -107,10 +130,11 @@ final class NotificationMirror {
                 seen.insert(id)
                 if seen.count > 500 { seen.removeAll(); seen.insert(id) }
                 guard announce, let item = Self.read(banner) else { continue }
-                queue.append(item)
-                if Prefs.shared.hideSystemBanners { Self.close(banner) }
+                found.append(item)
+                if hide { Self.close(banner) }
             }
         }
+        return found
     }
 
     /// Show queued notifications one at a time.
