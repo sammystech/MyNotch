@@ -24,6 +24,16 @@ final class CameraController: ObservableObject {
         return v
     }()
 
+    init() {
+        // Build the preview view — and attach it to the session — RIGHT NOW,
+        // at launch, while the camera queue has never run. Attaching takes the
+        // session's lock; done lazily on first Mirror open it raced the queue's
+        // startRunning (which holds that lock for 1–2s) and froze main for up
+        // to 2s (seen in a stress-test sample: addVideoPreviewLayer → ulock).
+        // After this the main thread never touches the session again.
+        _ = previewView
+    }
+
     // Start/stop requests are coalesced: only the LATEST wish is applied, so
     // flicking between tabs can't queue up a stack of slow start/stops.
     private let wishLock = NSLock()
@@ -116,6 +126,13 @@ final class CameraController: ObservableObject {
         }
         session.commitConfiguration()
         configured = true
+        // The preview's connection only exists once an input is added, so
+        // mirroring is applied here (camera queue) — the view was created
+        // before the camera was configured.
+        if let conn = previewView.previewLayer.connection, conn.isVideoMirroringSupported {
+            conn.automaticallyAdjustsVideoMirroring = false
+            conn.isVideoMirrored = true
+        }
     }
 }
 
