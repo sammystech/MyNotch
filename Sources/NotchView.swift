@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 // The notch silhouette. Square top edge flush with the screen, continuous
 // ("squircle") bottom corners like Apple's hardware, and — when open —
@@ -51,7 +52,11 @@ struct NotchRootView: View {
     @ObservedObject private var state = NotchState.shared
     @StateObject private var camera = CameraController()
     @StateObject private var calendar = CalendarController()
-    @ObservedObject private var music = MusicController.shared
+    // NOT observed here: MusicController publishes every 1.5s poll and at
+    // mouse rate while jogging the record, and observing it re-rendered the
+    // ENTIRE notch each time. MusicPanel / MusicIslandContent observe it
+    // themselves; the root only needs play/pause changes (onReceive below).
+    private let music = MusicController.shared
     @StateObject private var turntable = Turntable()
     @ObservedObject private var shelf = ShelfController.shared
     @Namespace private var tabNS
@@ -72,13 +77,15 @@ struct NotchRootView: View {
         }
         .onChange(of: state.selected) { _, kind in
             if kind == .mirror && state.expanded { camera.start() } else { camera.stop() }
+            if kind == .calendar { calendar.reloadIfAllowed() }
             syncTurntable()
         }
-        .onChange(of: music.now?.isPlaying) { _, _ in syncTurntable() }
+        .onReceive(music.$now.map { $0?.isPlaying ?? false }.removeDuplicates()) { _ in syncTurntable() }
         .onAppear {
             calendar.requestAndLoad()
             camera.prepare()        // pre-configure so the Mirror opens faster
             music.scratch.warm()    // pre-synthesize the jog whir off-thread
+            music.onAbortJog = { [turntable] in turntable.endJog() }
         }
     }
 

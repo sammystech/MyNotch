@@ -8,6 +8,31 @@ final class CameraController: ObservableObject {
     private let queue = DispatchQueue(label: "notchnook.camera")
     private var configured = false
 
+    // ONE preview view for the app's lifetime. It used to be created and
+    // destroyed with the Mirror panel; destroying it detaches the preview
+    // layer from the session, which takes the session's lock ON THE MAIN
+    // THREAD — and if the camera queue was mid start/stopRunning (1–2s,
+    // holding that lock) the whole app froze until it finished. Panels now
+    // only borrow this view (CameraHostView), so it is never torn down.
+    private(set) lazy var previewView: CameraNSView = {
+        let v = CameraNSView(frame: .zero)
+        v.previewLayer.session = session
+        if let conn = v.previewLayer.connection, conn.isVideoMirroringSupported {
+            conn.automaticallyAdjustsVideoMirroring = false
+            conn.isVideoMirrored = true            // mirror like a real mirror
+        }
+        return v
+    }()
+
+    // Start/stop requests are coalesced: only the LATEST wish is applied, so
+    // flicking between tabs can't queue up a stack of slow start/stops.
+    private let wishLock = NSLock()
+    private var wantRunning = false
+    private var wish: Bool {
+        get { wishLock.lock(); defer { wishLock.unlock() }; return wantRunning }
+        set { wishLock.lock(); wantRunning = newValue; wishLock.unlock() }
+    }
+
     private func setStatus(_ s: String, denied: Bool = false) {
         DispatchQueue.main.async {
             self.status = s
@@ -56,17 +81,25 @@ final class CameraController: ObservableObject {
     }
 
     private func run() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            if !self.configured { self.configure() }
-            if !self.session.isRunning { self.session.startRunning() }
-        }
+        wish = true
+        queue.async { [weak self] in self?.applyWish() }
     }
 
     func stop() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            if self.session.isRunning { self.session.stopRunning() }
+        guard wish else { return }
+        wish = false
+        // A short grace: leaving the Mirror and coming straight back (or a
+        // quick close/open) shouldn't pay a full stop + start.
+        queue.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.applyWish() }
+    }
+
+    /// camera queue: bring the session in line with the latest wish.
+    private func applyWish() {
+        if wish {
+            if !configured { configure() }
+            if !session.isRunning { session.startRunning() }
+        } else if session.isRunning {
+            session.stopRunning()
         }
     }
 
@@ -108,18 +141,43 @@ final class CameraNSView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-struct CameraPreview: NSViewRepresentable {
-    let session: AVCaptureSession
-    func makeNSView(context: Context) -> CameraNSView {
-        let v = CameraNSView(frame: .zero)
-        v.previewLayer.session = session
-        if let conn = v.previewLayer.connection, conn.isVideoMirroringSupported {
-            conn.automaticallyAdjustsVideoMirroring = false
-            conn.isVideoMirrored = true            // mirror like a real mirror
+/// Borrows the controller's single long-lived preview view while on screen.
+/// When this host goes away the preview view is merely un-parented — never
+/// deallocated — so nothing touches the capture session on the main thread.
+final class CameraHostView: NSView {
+    weak var controller: CameraController?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        adopt()
+    }
+
+    func adopt() {
+        guard window != nil, let preview = controller?.previewView else { return }
+        if preview.superview !== self {
+            preview.removeFromSuperview()
+            addSubview(preview)
         }
+        preview.frame = bounds
+    }
+
+    override func layout() {
+        super.layout()
+        controller?.previewView.frame = bounds
+    }
+
+    // Clicks belong to the SwiftUI buttons drawn over the feed.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+struct CameraPreview: NSViewRepresentable {
+    let controller: CameraController
+    func makeNSView(context: Context) -> CameraHostView {
+        let v = CameraHostView(frame: .zero)
+        v.controller = controller
         return v
     }
-    func updateNSView(_ nsView: CameraNSView, context: Context) {}
+    func updateNSView(_ nsView: CameraHostView, context: Context) { nsView.adopt() }
 }
 
 // Full-bleed mirror: the feed fills the ENTIRE open notch, edge to edge —
@@ -137,7 +195,7 @@ struct MirrorPanel: View {
                     .font(.system(size: 18))
                     .foregroundColor(.white.opacity(0.12))
             }
-            CameraPreview(session: controller.session)
+            CameraPreview(controller: controller)
 
             // Scrims: darken just the strips where the tabs and footer sit.
             VStack(spacing: 0) {

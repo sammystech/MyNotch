@@ -93,7 +93,19 @@ final class Updater {
             if !interactive && Prefs.shared.autoUpdate {
                 self.installWhenIdle(dmgURL, version: latest)
             } else {
-                self.offer(version: latest, notes: notes, dmg: dmgURL)
+                if interactive {
+                    self.offer(version: latest, notes: notes, dmg: dmgURL)
+                } else {
+                    // Unprompted: never a modal alert. runModal() blocks every
+                    // window of the app — the notch included — and from a
+                    // background accessory app it can open behind other
+                    // windows, so the notch just looked frozen.
+                    DispatchQueue.main.async {
+                        Toasts.shared.show(title: "My Notch \(latest) is available",
+                                           subtitle: "Settings → Check for Updates to install",
+                                           icon: "device:arrow.down.circle.fill", sound: nil, badge: nil)
+                    }
+                }
             }
         }.resume()
     }
@@ -153,17 +165,24 @@ final class Updater {
                 return
             }
             NSLog("MyNotch auto-updating to \(version)")
-            self.download(url, version: version)
+            self.download(url, version: version, interactive: false)
         }
     }
 
     // MARK: Download + install
 
-    private func download(_ url: URL, version: String) {
+    /// Failures only become a modal alert when the user asked for this
+    /// update; an automatic one fails quietly (logged) and retries later.
+    private func fail(_ title: String, _ body: String, interactive: Bool) {
+        NSLog("MyNotch update: \(title) — \(body)")
+        if interactive { alert(title, body) }
+    }
+
+    private func download(_ url: URL, version: String, interactive: Bool = true) {
         URLSession.shared.downloadTask(with: url) { [weak self] tmp, _, error in
             guard let self else { return }
             guard let tmp else {
-                self.alert("Download failed", error?.localizedDescription ?? "Couldn't download the update.")
+                self.fail("Download failed", error?.localizedDescription ?? "Couldn't download the update.", interactive: interactive)
                 return
             }
             // Move off the URLSession temp path before it's reaped.
@@ -171,21 +190,35 @@ final class Updater {
                 .appendingPathComponent("MyNotch-\(version).dmg")
             try? FileManager.default.removeItem(at: dest)
             do { try FileManager.default.moveItem(at: tmp, to: dest) }
-            catch { self.alert("Download failed", error.localizedDescription); return }
-            self.install(dmg: dest)
+            catch { self.fail("Download failed", error.localizedDescription, interactive: interactive); return }
+            // Verify the image BEFORE quitting to install it: a truncated or
+            // corrupt download used to make the install script bail out after
+            // the app had already quit — and nothing relaunched it.
+            let verify = Process()
+            verify.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+            verify.arguments = ["verify", "-quiet", dest.path]
+            do { try verify.run(); verify.waitUntilExit() } catch {}
+            guard verify.terminationStatus == 0 else {
+                try? FileManager.default.removeItem(at: dest)
+                self.fail("Update download was damaged", "It will be retried later.", interactive: interactive)
+                return
+            }
+            self.install(dmg: dest, interactive: interactive)
         }.resume()
     }
 
     /// Hands the swap to a detached script: we can't replace our own bundle
     /// while running, so the script waits for us to quit, copies, and reopens.
-    private func install(dmg: URL) {
+    private func install(dmg: URL, interactive: Bool = true) {
         let appPath = Bundle.main.bundlePath
         let script = """
         #!/bin/bash
-        set -e
+        # No `set -e`: any failure must still reach the relaunch below. The
+        # EXIT trap guarantees the app comes back whatever happens.
         DMG="\(dmg.path)"
         APP="\(appPath)"
         MOUNT=$(mktemp -d /tmp/mynotch-update-XXXXXX)
+        trap 'hdiutil detach "$MOUNT" -quiet 2>/dev/null; open "$APP"' EXIT
 
         # Wait for the running copy to actually exit (max ~10s).
         for _ in $(seq 1 50); do
@@ -202,13 +235,18 @@ final class Updater {
           NEW=""
         fi
         if [ -n "$NEW" ]; then
-          rm -rf "$APP"
-          cp -R "$NEW" "$APP"
-          xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+          # Copy next to it first; only replace once the copy is complete, so a
+          # failed copy leaves the working app in place instead of none.
+          rm -rf "$APP.new"
+          if cp -R "$NEW" "$APP.new"; then
+            rm -rf "$APP" && mv "$APP.new" "$APP"
+            xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+          else
+            rm -rf "$APP.new"
+          fi
         fi
         hdiutil detach "$MOUNT" -quiet || true
         rm -rf "$MOUNT" "$DMG"
-        open "$APP"
         """
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("mynotch-update.sh")
@@ -216,14 +254,14 @@ final class Updater {
             try script.write(to: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
         } catch {
-            alert("Update failed", error.localizedDescription); return
+            fail("Update failed", error.localizedDescription, interactive: interactive); return
         }
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/bash")
         task.arguments = [path.path]
         do { try task.run() } catch {
-            alert("Update failed", error.localizedDescription); return
+            fail("Update failed", error.localizedDescription, interactive: interactive); return
         }
         DispatchQueue.main.async { NSApp.terminate(nil) }
     }

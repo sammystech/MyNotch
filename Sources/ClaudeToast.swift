@@ -102,10 +102,10 @@ final class Toasts {
     }
 
     /// Real app icons for "app:<bundle id>", cached.
-    private static var iconCache: [String: NSImage] = [:]
+    private static var iconCache: [String: NSImage?] = [:]   // nil = looked, none (don't re-search every render)
     static func appIcon(_ ref: String) -> NSImage? {
         if let hit = iconCache[ref] { return hit }
-        guard let url = appURL(ref) else { return nil }
+        guard let url = appURL(ref) else { iconCache[ref] = .some(nil); return nil }
         let lazy = NSWorkspace.shared.icon(forFile: url.path)
         // Workspace icons draw lazily, and SwiftUI rendered them blank — so
         // rasterize once into a plain bitmap at a crisp size.

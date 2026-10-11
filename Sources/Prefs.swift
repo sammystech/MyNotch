@@ -26,7 +26,16 @@ final class Prefs: ObservableObject {
         shelfAutoOpen = flag("prefShelfAutoOpen")
         musicIsland   = flag("prefMusicIsland")
         scratchSound  = flag("prefScratchSound")
-        launchAtLogin = LoginItem.isEnabled
+        // SMAppService.status is a synchronous XPC call — slow right after a
+        // reboot, exactly when a login item launches — so start from the last
+        // known value and refresh it off the main thread.
+        launchAtLogin = d.object(forKey: "launchAtLogin") == nil ? true : d.bool(forKey: "launchAtLogin")
+        DispatchQueue.global(qos: .utility).async {
+            let actual = LoginItem.isEnabled
+            DispatchQueue.main.async {
+                if Prefs.shared.launchAtLogin != actual { Prefs.shared.launchAtLogin = actual }
+            }
+        }
         systemHUD     = flag("prefSystemHUD")
         claudePopups  = flag("prefClaudePopups")
         codexPopups   = flag("prefCodexPopups")

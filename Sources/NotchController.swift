@@ -138,10 +138,18 @@ final class HitContainerView: NSView {
         withAnimation(NotchMotion.nudge) { s.dropTarget = t }
     }
 
+    // Read the drag's files ONCE per drag (keyed by the drag's sequence
+    // number): reading the pasteboard on every draggingUpdated was a full
+    // pasteboard round-trip on the main thread at mouse-move rate.
+    private var cachedDrag: (seq: Int, urls: [URL])?
+
     private func urls(from sender: NSDraggingInfo) -> [URL] {
+        if let c = cachedDrag, c.seq == sender.draggingSequenceNumber { return c.urls }
         let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
-        return (sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
-                                                      options: opts) as? [URL]) ?? []
+        let found = (sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+                                                           options: opts) as? [URL]) ?? []
+        cachedDrag = (sender.draggingSequenceNumber, found)
+        return found
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -248,9 +256,11 @@ final class NotchController {
 
         // Safety-net poll: enter/exit events don't fire for warped cursors,
         // space switches, or a cursor already parked on the notch at launch.
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            self?.pollCursor()
-        }
+        // .common so it keeps running during menu/modal/event tracking —
+        // the default mode silently paused it, and with it this safety net.
+        let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.pollCursor() }
+        RunLoop.main.add(t, forMode: .common)
+        pollTimer = t
     }
 
     func show() {
@@ -352,6 +362,12 @@ final class NotchController {
         if state.interacting && NSEvent.pressedMouseButtons == 0 {
             state.interacting = false
             MusicController.shared.abortInteraction()
+        }
+        // A slider drag whose gesture was cancelled (panel collapsed, Space
+        // switch…) never gets onEnded — finish it here so the volume pill
+        // doesn't stay stuck and stop appearing.
+        if SystemHUD.shared.dragging && NSEvent.pressedMouseButtons == 0 {
+            SystemHUD.shared.endDrag()
         }
 
         setHover(rect.contains(mouse))

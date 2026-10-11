@@ -135,6 +135,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let keys = env["MYNOTCH_KEYS"] { SystemHUD.shared.runDebugKeys(keys) }
         // MYNOTCH_TAPTEST=1: exercise the media-key pairing logic with a
         // counting stub (no real volume change), print results, quit.
+        // MYNOTCH_STRESS=N: N rapid open/close + tab switches (incl. Mirror, so
+        // the camera really starts/stops) while a watchdog measures the
+        // longest main-thread stall. Prints STRESS lines, then quits.
+        if let n = Int(env["MYNOTCH_STRESS"] ?? "") {
+            let lock = NSLock(); var worst = 0.0, pings = 0
+            let watchdog = Thread {
+                while true {
+                    let sent = CACurrentMediaTime()
+                    let done = DispatchSemaphore(value: 0)
+                    DispatchQueue.main.async { done.signal() }
+                    done.wait()
+                    let lag = CACurrentMediaTime() - sent
+                    lock.lock(); worst = max(worst, lag); pings += 1; lock.unlock()
+                    Thread.sleep(forTimeInterval: 0.02)
+                }
+            }
+            watchdog.start()
+            let kinds: [WidgetKind] = [.mirror, .music, .mirror, .shelf, .calendar, .mirror, .settings]
+            let s = NotchState.shared
+            for i in 0..<n {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3 + Double(i) * 0.16) {
+                    withAnimation(NotchMotion.morph) {
+                        if i % 9 == 8 { s.expanded.toggle() }     // close/reopen every 9th step
+                        else { s.expanded = true; s.selected = kinds[i % kinds.count] }
+                    }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3 + Double(n) * 0.16 + 2.5) {
+                withAnimation { s.expanded = false }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    lock.lock(); let w = worst, p = pings; lock.unlock()
+                    FileHandle.standardError.write(String(format: "STRESS steps=%d pings=%d worst_main_stall_ms=%.1f\n", n, p, w * 1000).data(using: .utf8)!)
+                    exit(0)
+                }
+            }
+        }
         if env["MYNOTCH_BTLIST"] == "1" {
             for l in SystemEvents.describePaired() { FileHandle.standardError.write(("BT " + l + "\n").data(using: .utf8)!) }
             exit(0)
@@ -163,11 +199,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             line("D 1 press + 60 repeats -> volume steps taken: \(calls)  (want <= 41)")
             _ = t.testFeed(code: vd, down: false, repeat: false)
             exit(0)
-        }
-        if let names = env["MYNOTCH_APPLOOKUP"] {
-            for n in names.split(separator: ",") {
-                FileHandle.standardError.write("LOOKUP \(n) -> \(NotificationMirror.appPath(named: String(n)) ?? "nil")\n".data(using: .utf8)!)
-            }
         }
         // MYNOTCH_POWER="4:1,5:0,5.5:1,…" = at t seconds, fake AC on(1)/off(0).
         if let spec = env["MYNOTCH_POWER"] {

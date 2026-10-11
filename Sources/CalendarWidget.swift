@@ -6,6 +6,23 @@ final class CalendarController: ObservableObject {
     @Published var events: [EKEvent] = []
     @Published var status: String = "Loading…"
     @Published var denied = false
+    private var observers: [NSObjectProtocol] = []
+
+    init() {
+        // The app runs for days: reload when events change (another device,
+        // the Calendar app) and when the day rolls over. It used to load once
+        // at launch and then show launch day's agenda forever.
+        let nc = NotificationCenter.default
+        observers = [
+            nc.addObserver(forName: .EKEventStoreChanged, object: store, queue: .main) { [weak self] _ in self?.reloadIfAllowed() },
+            nc.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in self?.reloadIfAllowed() },
+        ]
+    }
+
+    func reloadIfAllowed() {
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return }
+        load()
+    }
 
     func requestAndLoad() {
         store.requestFullAccessToEvents { [weak self] granted, _ in

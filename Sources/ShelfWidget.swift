@@ -120,15 +120,24 @@ final class ShelfController: ObservableObject {
         UserDefaults.standard.set(items.map(\.url.path), forKey: storeKey)
     }
 
+    /// Existence checks run in the background: a saved path on a sleeping
+    /// external disk or a dropped network share can block for seconds.
     private func restore() {
         let paths = UserDefaults.standard.stringArray(forKey: storeKey) ?? []
-        for p in paths where FileManager.default.fileExists(atPath: p) {
-            let item = ShelfItem(url: URL(fileURLWithPath: p))
-            items.append(item)
-            loadThumb(for: item)
+        guard !paths.isEmpty else { syncState(); return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let alive = paths.filter { FileManager.default.fileExists(atPath: $0) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                for p in alive where !self.items.contains(where: { $0.url.path == p }) {
+                    let item = ShelfItem(url: URL(fileURLWithPath: p))
+                    self.items.append(item)
+                    self.loadThumb(for: item)
+                }
+                if alive.count != paths.count { self.persist() }   // prune stale entries
+                self.syncState()
+            }
         }
-        if items.count != paths.count { persist() }   // prune stale entries
-        syncState()
     }
 }
 

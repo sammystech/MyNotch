@@ -36,6 +36,7 @@ final class NotificationMirror {
         let app: String
         let title: String
         let body: String
+        var appPath: String? = nil      // resolved on axQueue, never on main
     }
 
     func sync() {
@@ -47,9 +48,9 @@ final class NotificationMirror {
         attach()
         requestScan(announce: false)        // don't replay banners already up
         // Build the app index in the background, hand it over on main.
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async { [axQueue] in
             let built = Self.makeIndex()
-            DispatchQueue.main.async { Self.index = built; Self.indexBuilt = true }
+            axQueue.async { Self.index = built; Self.indexBuilt = true }   // index lives on axQueue
         }
         // Safety net + queue pump.
         let t = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in
@@ -129,7 +130,8 @@ final class NotificationMirror {
                 guard !id.isEmpty, !seen.contains(id) else { continue }
                 seen.insert(id)
                 if seen.count > 500 { seen.removeAll(); seen.insert(id) }
-                guard announce, let item = Self.read(banner) else { continue }
+                guard announce, var item = Self.read(banner) else { continue }
+                item.appPath = Self.appPath(named: item.app)   // LaunchServices work stays off main
                 found.append(item)
                 if hide { Self.close(banner) }
             }
@@ -141,11 +143,11 @@ final class NotificationMirror {
     private func pump() {
         guard !queue.isEmpty, NotchState.shared.toast == nil, NotchState.shared.hud == nil else { return }
         let item = queue.removeFirst()
-        let iconRef = Self.appPath(named: item.app).map { "app:" + $0 } ?? "device:bell.badge.fill"
+        let iconRef = item.appPath.map { "app:" + $0 } ?? "device:bell.badge.fill"
         Toasts.shared.show(title: item.title.isEmpty ? item.app : item.title,
                            subtitle: item.body.isEmpty ? item.app : item.body,
                            icon: iconRef, sound: nil,
-                           open: Self.appPath(named: item.app), badge: nil, tall: true)
+                           open: item.appPath, badge: nil, tall: true)
     }
 
     // MARK: AX helpers
@@ -196,14 +198,15 @@ final class NotificationMirror {
     /// file name ("Discord" vs "Discord.app" in a subfolder, "WhatsApp" vs
     /// "WhatsApp Desktop.app"…), so look it up in an index of every installed
     /// app keyed by ALL its names.
-    private static var pathCache: [String: String] = [:]
+    // All of these are touched ONLY on axQueue.
+    private static var pathCache: [String: String?] = [:]   // nil = looked, not found
     private static var index: [String: String] = [:]
     private static var indexBuilt = false
 
     static func appPath(named name: String) -> String? {
         guard !name.isEmpty else { return nil }
         let key = name.lowercased()
-        if let hit = pathCache[key] { return hit }
+        if let hit = pathCache[key], hit != nil || indexBuilt { return hit ?? nil }
         var found: String?
         // Only real apps — not helper extensions running under the same name
         // (Messages' assistant .appex lives inside Messages.app).
@@ -214,11 +217,14 @@ final class NotificationMirror {
             found = url.path
         }
         if found == nil {
-            if !indexBuilt { index = makeIndex(); indexBuilt = true }
+            // Never build the index inline — until the background build lands,
+            // fall back to the bell icon rather than walking /Applications here.
             found = index[key]
                 ?? index.first(where: { $0.key.hasPrefix(key) || key.hasPrefix($0.key) })?.value
         }
-        if let found { pathCache[key] = found }
+        // Cache misses too (only once the index exists, so a miss before it
+        // lands gets retried), so an unresolvable app isn't re-searched.
+        if found != nil || indexBuilt { pathCache[key] = .some(found) }
         return found
     }
 

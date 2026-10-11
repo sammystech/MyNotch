@@ -186,9 +186,9 @@ final class MusicController: ObservableObject {
     init() {
         trackRunningPlayers()
         poll()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            self?.poll()
-        }
+        let t = Timer(timeInterval: 1.5, repeats: true) { [weak self] _ in self?.poll() }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     // Only script apps that are actually running (so we never launch them).
@@ -224,9 +224,17 @@ final class MusicController: ObservableObject {
         players.first { runningPlayerIDs.contains($0.bundleID) }
     }
 
+    /// One transport command in flight at a time. If Music is hung (or its
+    /// Automation prompt is up), clicks used to stack up on the script queue,
+    /// the controls looked dead, then everything fired in a burst.
+    private var commandInFlight = false   // main thread
+
     func command(_ verb: String) {
+        guard !commandInFlight else { return }
         guard let app = now?.app ?? runningPlayer()?.name else { return }
+        commandInFlight = true
         Self.runScriptAsync("tell application \"\(app)\" to \(verb)") { [weak self] _ in
+            DispatchQueue.main.async { self?.commandInFlight = false }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self?.poll() }
         }
     }
@@ -303,9 +311,14 @@ final class MusicController: ObservableObject {
     /// Recovery for a drag that was cancelled rather than ended (SwiftUI never
     /// delivers onEnded in that case). Restores playback if a jog had paused it,
     /// so music can't get stranded in a paused state.
+    /// Set by the view that owns the Turntable: lets a cancelled jog put the
+    /// record back under its own physics (otherwise it sat frozen).
+    var onAbortJog: (() -> Void)?
+
     func abortInteraction() {
         scrubbing = nil
         guard jogging else { return }
+        onAbortJog?()
         jogging = false
         jogTargetPos = nil
         scratch.beginFadeOut()
@@ -385,6 +398,15 @@ final class MusicController: ObservableObject {
         if np.title.isEmpty { clear(); return }
 
         let changed = now?.trackKey != np.trackKey
+        // Publish only real changes. Re-assigning `now` every 1.5s poll (its
+        // sampledAt always differs) re-rendered the music views forever, even
+        // paused with the panel closed. Steady playback is extrapolated.
+        if let cur = now, !changed, cur.playing == np.playing,
+           abs(cur.duration - np.duration) < 0.5,
+           abs(cur.position(at: np.sampledAt) - np.elapsed) < 1.0 {
+            updateIsland(playing: np.playing)
+            return
+        }
         now = np
         if changed { fetchArtwork(for: np) }
         updateIsland(playing: np.playing)
@@ -582,11 +604,13 @@ struct ArtworkView: View {
 
 /// The player's own app icon + name ("Music", "Spotify"), cached per app.
 private enum SourceBadge {
-    private static var cache: [String: NSImage] = [:]
+    private static var cache: [String: NSImage?] = [:]   // misses cached too
     static func icon(for app: String) -> NSImage? {
         if let hit = cache[app] { return hit }
         guard let id = players.first(where: { $0.name == app })?.bundleID,
-              let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return nil }
+              let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else {
+            cache[app] = .some(nil); return nil
+        }
         let img = NSWorkspace.shared.icon(forFile: url.path)
         cache[app] = img
         return img

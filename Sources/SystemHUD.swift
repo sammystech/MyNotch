@@ -25,43 +25,153 @@ struct HUDState: Equatable {
 // MARK: Volume (CoreAudio)
 
 final class VolumeControl {
-    private var device: AudioObjectID = 0
-    private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
-    var onExternalChange: (() -> Void)?
-    private var externalWork: DispatchWorkItem?
+    // EVERY CoreAudio (HAL) call happens on this queue — never on the main
+    // thread. HAL calls are synchronous IPC to coreaudiod; for Bluetooth
+    // outputs a volume set can take tens of ms, and doing them on main at
+    // slider-drag / key-repeat rate stalled the whole app. Listeners are
+    // registered here too: removing a HAL listener from the queue it's
+    // delivered on can stall or deadlock.
+    private let hal = DispatchQueue(label: "MyNotch.coreaudio", qos: .userInitiated)
+
+    /// What the rest of the app reads — a cached snapshot, refreshed on `hal`.
+    private struct Snapshot {
+        var device: AudioObjectID = 0
+        var canControl = false
+        var volume: Double = 0
+        var muted = false
+        var name = "Headphones"
+        var symbol = "speaker"
+        var headphones = false
+    }
+    private let lock = NSLock()
+    private var snap = Snapshot()
+    private func read<T>(_ f: (Snapshot) -> T) -> T { lock.lock(); defer { lock.unlock() }; return f(snap) }
+    private func write(_ f: (inout Snapshot) -> Void) { lock.lock(); f(&snap); lock.unlock() }
+
+    private var device: AudioObjectID = 0      // hal queue only
+    private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []  // hal only
+    var onExternalChange: (() -> Void)?        // called on main
+    private var externalWork: DispatchWorkItem?   // main only
     // Starts in the future: registering the listeners at launch reports a
     // "change" that flashed the volume pill on every launch/login.
-    private var ourChangeUntil = Date().addingTimeInterval(4)
+    private var ourChangeUntil = Date().addingTimeInterval(4)   // guarded by lock
+
+    // Coalesced writes: only the latest wish is sent to coreaudiod.
+    private var pendingVolume: Double?
+    private var pendingMute: Bool?
 
     private static let mainVolume = kAudioHardwareServiceDeviceProperty_VirtualMainVolume
 
     init() {
-        device = Self.defaultOutput()
-        watch()
-        // Follow the default output (plugging in AirPods, switching to HDMI…).
-        var addr = Self.addr(kAudioHardwarePropertyDefaultOutputDevice, scope: kAudioObjectPropertyScopeGlobal)
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main) { [weak self] _, _ in
+        hal.async { [weak self] in
             guard let self else { return }
-            let old = self.device
-            self.unwatch()
             self.device = Self.defaultOutput()
+            self.refreshSnapshot()
             self.watch()
-            guard self.device != old, self.device != 0 else { return }
-            // The switch also nudges the volume properties — don't let that
-            // flash the volume pill over the "connected" pop-up.
-            self.ourChangeUntil = Date().addingTimeInterval(1.5)
-            self.onDeviceChange?()
+            // Follow the default output (plugging in AirPods, switching to HDMI…).
+            var addr = Self.addr(kAudioHardwarePropertyDefaultOutputDevice, scope: kAudioObjectPropertyScopeGlobal)
+            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, self.hal) { [weak self] _, _ in
+                guard let self else { return }
+                let old = self.device
+                self.unwatch()
+                self.device = Self.defaultOutput()
+                self.refreshSnapshot()
+                self.watch()
+                guard self.device != old, self.device != 0 else { return }
+                // The switch also nudges the volume properties — don't let that
+                // flash the volume pill over the "connected" pop-up.
+                self.lock.lock(); self.ourChangeUntil = Date().addingTimeInterval(1.5); self.lock.unlock()
+                DispatchQueue.main.async { self.onDeviceChange?() }
+            }
         }
     }
 
-    /// Fired when the default output switches (e.g. AirPods connect).
+    /// Fired (on main) when the default output switches (e.g. AirPods connect).
     var onDeviceChange: (() -> Void)?
 
-    var isHeadphones: Bool {
-        transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
+    /// hal queue: re-read everything the app displays.
+    private func refreshSnapshot() {
+        var v = Float32(0), m = UInt32(0)
+        let gotV = get(Self.mainVolume, &v)
+        let gotM = get(kAudioDevicePropertyMute, &m)
+        let t = transport
+        let name = deviceNameNow
+        let headphones = t == kAudioDeviceTransportTypeBluetooth || t == kAudioDeviceTransportTypeBluetoothLE
+        let symbol: String = headphones ? Self.headphoneSymbol(for: name)
+            : (t == kAudioDeviceTransportTypeHDMI || t == kAudioDeviceTransportTypeDisplayPort) ? "tv" : "speaker"
+        let can = device != 0 && settable(Self.mainVolume)
+        write {
+            $0.device = device; $0.canControl = can; $0.name = name; $0.symbol = symbol; $0.headphones = headphones
+            if gotV { $0.volume = Double(v) }
+            if gotM { $0.muted = m != 0 }
+        }
     }
 
-    private var transport: UInt32 {
+    var isHeadphones: Bool { read { $0.headphones } }
+    /// The output's name as macOS shows it ("Sam's AirPods Pro").
+    var deviceName: String { read { $0.name } }
+    /// SF Symbol for what's playing out of: AirPods, a display, the Mac.
+    var deviceSymbol: String { read { $0.symbol } }
+    /// False for outputs macOS can't set a level on (many HDMI/DisplayPort
+    /// monitors) — those keys are left to the system. Safe on any thread.
+    var canControl: Bool { read { $0.canControl } }
+
+    /// The level we last asked for. macOS eases the speaker toward a new
+    /// level over a few hundred ms, so reading it back mid-fade returns a
+    /// stale in-between value. While our change is settling, trust this.
+    private var intended: Double?        // guarded by lock
+    private var intendedMute: Bool?      // guarded by lock
+
+    var volume: Double {
+        lock.lock(); defer { lock.unlock() }
+        if let intended, Date() < ourChangeUntil { return intended }
+        return snap.volume
+    }
+
+    var muted: Bool {
+        lock.lock(); defer { lock.unlock() }
+        if let intendedMute, Date() < ourChangeUntil { return intendedMute }
+        return snap.muted
+    }
+
+    func set(volume: Double) {
+        let v = min(1, max(0, volume))
+        lock.lock()
+        ourChangeUntil = Date().addingTimeInterval(1.2)
+        intended = v
+        snap.volume = v
+        let wasMuted = (intendedMute != nil && Date() < ourChangeUntil) ? intendedMute! : snap.muted
+        pendingVolume = v
+        lock.unlock()
+        // Like macOS: turning it up unmutes.
+        if v > 0, wasMuted { set(muted: false) }
+        hal.async { [weak self] in self?.flush() }
+    }
+
+    func set(muted on: Bool) {
+        lock.lock()
+        ourChangeUntil = Date().addingTimeInterval(1.2)
+        intendedMute = on
+        snap.muted = on
+        pendingMute = on
+        lock.unlock()
+        hal.async { [weak self] in self?.flush() }
+    }
+
+    /// hal queue: send only the latest pending values.
+    private func flush() {
+        lock.lock()
+        let v = pendingVolume, m = pendingMute
+        pendingVolume = nil; pendingMute = nil
+        lock.unlock()
+        if var f = v.map({ Float32($0) }) { set(Self.mainVolume, &f) }
+        if let m, settable(kAudioDevicePropertyMute) {
+            var u = UInt32(m ? 1 : 0)
+            set(kAudioDevicePropertyMute, &u)
+        }
+    }
+
+    private var transport: UInt32 {   // hal queue
         var t = UInt32(0)
         var a = Self.addr(kAudioDevicePropertyTransportType, scope: kAudioObjectPropertyScopeGlobal)
         var size = UInt32(MemoryLayout<UInt32>.size)
@@ -69,63 +179,13 @@ final class VolumeControl {
         return t
     }
 
-    /// The output's name as macOS shows it ("Sam's AirPods Pro").
-    var deviceName: String {
+    private var deviceNameNow: String {   // hal queue
         var name: Unmanaged<CFString>?
         var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         var a = Self.addr(kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal)
         guard AudioObjectGetPropertyData(device, &a, 0, nil, &size, &name) == noErr,
               let n = name?.takeRetainedValue() else { return "Headphones" }
         return n as String
-    }
-
-    /// False for outputs macOS can't set a level on (many HDMI/DisplayPort
-    /// monitors) — those keys are left to the system.
-    var canControl: Bool { device != 0 && settable(Self.mainVolume) }
-
-    /// The level we last asked for. macOS eases the speaker toward a new
-    /// level over a few hundred ms, so reading it back mid-fade returns a
-    /// stale in-between value — rapid presses then stepped from the wrong
-    /// place and the bar jittered. While our change is settling, trust this.
-    private var intended: Double?
-
-    var volume: Double {
-        if let intended, Date() < ourChangeUntil { return intended }
-        var v = Float32(0)
-        return get(Self.mainVolume, &v) ? Double(v) : 0
-    }
-
-    private var intendedMute: Bool?
-    var muted: Bool {
-        if let intendedMute, Date() < ourChangeUntil { return intendedMute }
-        var m = UInt32(0)
-        return get(kAudioDevicePropertyMute, &m) && m != 0
-    }
-
-    func set(volume: Double) {
-        ourChangeUntil = Date().addingTimeInterval(1.2)
-        intended = min(1, max(0, volume))
-        var v = Float32(intended!)
-        set(Self.mainVolume, &v)
-        // Like macOS: turning it up unmutes; reaching zero reads as muted.
-        if v > 0, muted { set(muted: false) }
-    }
-
-    func set(muted on: Bool) {
-        ourChangeUntil = Date().addingTimeInterval(1.2)
-        intendedMute = on
-        var m = UInt32(on ? 1 : 0)
-        if settable(kAudioDevicePropertyMute) { set(kAudioDevicePropertyMute, &m) }
-    }
-
-    /// SF Symbol for what's playing out of: AirPods, a display, the Mac.
-    var deviceSymbol: String {
-        switch transport {
-        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
-            return Self.headphoneSymbol(for: deviceName)
-        case kAudioDeviceTransportTypeHDMI, kAudioDeviceTransportTypeDisplayPort: return "tv"
-        default: return "speaker"
-        }
     }
 
     /// The SF Symbol for the exact model, by name — Apple ships a glyph for
@@ -144,27 +204,33 @@ final class VolumeControl {
     }
 
     // Changes from Control Center, AirPods, other apps → show the island too.
+    // hal queue.
     private func watch() {
         guard device != 0 else { return }
         for sel in [Self.mainVolume, kAudioDevicePropertyMute] {
             var a = Self.addr(sel)
             let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                guard let self, Date() > self.ourChangeUntil else { return }
-                self.externalWork?.cancel()
-                let w = DispatchWorkItem { [weak self] in self?.onExternalChange?() }
-                self.externalWork = w
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: w)
+                guard let self else { return }
+                self.refreshSnapshot()
+                self.lock.lock(); let ours = Date() <= self.ourChangeUntil; self.lock.unlock()
+                guard !ours else { return }
+                DispatchQueue.main.async {
+                    self.externalWork?.cancel()
+                    let w = DispatchWorkItem { [weak self] in self?.onExternalChange?() }
+                    self.externalWork = w
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: w)
+                }
             }
-            if AudioObjectAddPropertyListenerBlock(device, &a, .main, block) == noErr {
+            if AudioObjectAddPropertyListenerBlock(device, &a, hal, block) == noErr {
                 listeners.append((device, a, block))
             }
         }
     }
 
-    private func unwatch() {
+    private func unwatch() {   // hal queue
         for (dev, a, block) in listeners {
             var a = a
-            AudioObjectRemovePropertyListenerBlock(dev, &a, .main, block)
+            AudioObjectRemovePropertyListenerBlock(dev, &a, hal, block)
         }
         listeners.removeAll()
     }
@@ -536,7 +602,13 @@ final class SystemHUD {
     /// pill out until the finger lifts.
     func drag(to fraction: Double) {
         guard let hud = NotchState.shared.hud else { return }
-        if !dragging { dragging = true; hideWork?.cancel() }
+        if !dragging {
+            dragging = true; hideWork?.cancel()
+            // Keeps the open panel from collapsing mid-drag (which cancels the
+            // gesture). The 10 Hz poll clears it if the mouse is released
+            // without onEnded ever firing.
+            NotchState.shared.interacting = true
+        }
         let f = min(1, max(0, fraction))
         switch hud.kind {
         case .volume:
@@ -552,6 +624,7 @@ final class SystemHUD {
     func endDrag() {
         guard dragging else { return }
         dragging = false
+        NotchState.shared.interacting = false
         if NotchState.shared.hud?.kind == .volume,
            UserDefaults(suiteName: ".GlobalPreferences")?.integer(forKey: "com.apple.sound.beep.feedback") == 1 {
             feedback?.stop(); feedback?.play()      // the macOS volume "pop", like its own slider
@@ -572,6 +645,7 @@ final class SystemHUD {
     /// Clicked away: tuck the volume/brightness pill back in right now.
     func dismissQuickly() {
         hideWork?.cancel()
+        if dragging { dragging = false; NotchState.shared.interacting = false }
         withAnimation(.spring(response: 0.24, dampingFraction: 0.92)) { NotchState.shared.hud = nil }
     }
 
