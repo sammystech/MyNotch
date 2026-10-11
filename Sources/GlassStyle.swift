@@ -56,7 +56,9 @@ struct SwapModifier: ViewModifier {
         content
             .opacity(Double(progress))
             .scaleEffect(0.97 + 0.03 * progress)
-            .blur(radius: (1 - progress) * 6)
+            // No blur here: a blur allocates an offscreen surface for the
+            // whole panel on EVERY tab switch, and the render-server sync for
+            // it showed up as main-thread waits in a stress-test sample.
     }
 }
 
