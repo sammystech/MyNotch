@@ -44,7 +44,6 @@ Needs only the Xcode **Command Line Tools** — no full Xcode.
 ```bash
 ./setup_signing_identity.sh   # once: creates a local signing certificate
 ./build.sh                    # builds build/MyNotch.app
-./build_dmg.sh                # also packages dist/MyNotch.dmg
 ```
 
 `setup_signing_identity.sh` matters more than it looks: ad-hoc signing pins
