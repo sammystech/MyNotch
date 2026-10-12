@@ -4,8 +4,8 @@ import AppKit
 // MARK: - Now Playing on the lock screen
 //
 // Like Canopy / iOS: while the Mac is locked and something is playing, a
-// glass Now Playing card sits under the system clock. Tap the artwork to
-// blow it up into a big cover; tap again to fold it back.
+// glass Now Playing card with the big album cover sits under the system
+// clock. Tap the cover to fold it into a compact bar; tap again to grow it.
 //
 // A normal window can't appear over the lock screen. The trick (same one
 // other notch apps use) is SkyLight's private API: make a window-server
@@ -112,7 +112,7 @@ private final class FirstMouseHostingView<V: View>: NSHostingView<V> {
 
 struct LockScreenCard: View {
     @ObservedObject var controller: MusicController
-    @State private var big = ProcessInfo.processInfo.environment["MYNOTCH_LOCKBIG"] == "1"   // test hook
+    @State private var big = ProcessInfo.processInfo.environment["MYNOTCH_LOCKBIG"] != "0"   // big cover by default, like iOS; MYNOTCH_LOCKBIG=0 starts compact
     @Namespace private var ns
 
     var body: some View {
