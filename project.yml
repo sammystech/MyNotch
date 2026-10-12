@@ -9,7 +9,9 @@ targets:
   MyNotch:
     type: application
     platform: macOS
-    sources: [Sources]
+    sources:
+      - Sources
+      - AppIcon.icon
     settings:
       base:
         PRODUCT_NAME: MyNotch
@@ -19,15 +21,10 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: CH6CSBA54G
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.0"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         GENERATE_INFOPLIST_FILE: NO
         # Info.plist is the source of truth for versions.
         MARKETING_VERSION: ""
         CURRENT_PROJECT_VERSION: ""
-    postBuildScripts:
-      - name: Copy app icon
-        script: cp "$SRCROOT/AppIcon.icns" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/AppIcon.icns"
-        inputFiles: [$(SRCROOT)/AppIcon.icns]
-        outputFiles: [$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AppIcon.icns]
