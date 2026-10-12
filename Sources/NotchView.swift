@@ -98,7 +98,7 @@ struct NotchRootView: View {
 
     // Spin the record only when the music panel is actually visible & playing.
     private func syncTurntable() {
-        turntable.playing = state.expanded && state.selected == .music && (music.now?.isPlaying ?? false)
+        turntable.playing = Prefs.shared.vinyl && state.expanded && state.selected == .music && (music.now?.isPlaying ?? false)
     }
 
     private var notch: some View {

@@ -82,7 +82,13 @@ struct SettingsPanel: View {
                     card {
                         row("Music in the Notch", "music.note", .pink, $settings.musicIsland)
                         separator
-                        row("Scratch Sound", "waveform", .orange, $settings.scratchSound)
+                        row("Music on Lock Screen", "lock.fill", .blue, $settings.lockScreenMusic)
+                        separator
+                        row("Vinyl Record", "record.circle", .gray, $settings.vinyl)
+                        if settings.vinyl {
+                            separator
+                            row("Scratch Sound", "waveform", .orange, $settings.scratchSound)
+                        }
                     }
 
                     card {

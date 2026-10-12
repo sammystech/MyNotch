@@ -17,6 +17,9 @@ final class Prefs: ObservableObject {
     @Published var deviceAlerts: Bool { didSet { set(deviceAlerts, "prefDeviceAlerts"); SystemEvents.shared.sync() } }
     @Published var notificationsInNotch: Bool { didSet { set(notificationsInNotch, "prefNotifInNotch"); NotificationMirror.shared.sync() } }
     @Published var hideSystemBanners: Bool { didSet { set(hideSystemBanners, "prefHideBanners") } }
+    @Published var lockScreenMusic: Bool { didSet { set(lockScreenMusic, "prefLockScreenMusic") } }
+    /// Spinning record in the Music tab; off = Apple Music-style album art.
+    @Published var vinyl: Bool { didSet { set(vinyl, "prefVinyl") } }
 
     private init() {
         let d = UserDefaults.standard
@@ -42,6 +45,8 @@ final class Prefs: ObservableObject {
         deviceAlerts  = flag("prefDeviceAlerts")
         notificationsInNotch = flag("prefNotifInNotch")
         hideSystemBanners    = flag("prefHideBanners")
+        lockScreenMusic      = flag("prefLockScreenMusic")
+        vinyl                = d.bool(forKey: "prefVinyl")      // new look by default
         // Auto-update is ON for every new install, and forced on ONCE for
         // everyone moving to this version (even if they'd turned it off) —
         // after that, their choice sticks.

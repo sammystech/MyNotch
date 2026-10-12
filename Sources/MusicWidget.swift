@@ -357,7 +357,7 @@ final class MusicController: ObservableObject {
         // Never let polls stack up. Without this the 1.5s timer keeps firing
         // while a slow Apple Event is still outstanding, and every queued poll
         // delays the user's own play/pause/seek behind it.
-        guard !pollInFlight else { return }
+        guard !pollInFlight, !fake else { return }
         guard let player = runningPlayer() else { clear(); return }
         let sep = "\u{001F}"      // unit separator — won't appear in metadata
         let src = """
@@ -410,6 +410,22 @@ final class MusicController: ObservableObject {
         now = np
         if changed { fetchArtwork(for: np) }
         updateIsland(playing: np.playing)
+    }
+
+    // MYNOTCH_FAKEMUSIC=1 (testing): a made-up track with gradient art, so
+    // the music UI can be screenshotted without playing anything.
+    private var fake = false
+    func debugFake() {
+        fake = true
+        var np = NowPlaying()
+        np.app = "Music"; np.title = "Midnight City"; np.artist = "M83"; np.album = "Hurry Up, We're Dreaming"
+        np.duration = 243; np.elapsed = 71; np.playing = true; np.sampledAt = Date()
+        now = np
+        artwork = NSImage(size: NSSize(width: 300, height: 300), flipped: false) { r in
+            NSGradient(colors: [.systemPink, .systemPurple, .systemIndigo])?.draw(in: r, angle: -45)
+            return true
+        }
+        updateIsland(playing: true)
     }
 
     private func clear() {
@@ -889,6 +905,27 @@ final class DiscView: NSView {
 // grooves, a spindle label, and a still light-sheen on top. The sheen stays
 // fixed while the disc turns under it — that's what makes it read as a real
 // spinning record. Isolated view so the 60 Hz rotation only re-renders this.
+/// Apple Music's look: a rounded cover that sits up full-size while playing
+/// and settles back smaller when paused, with a soft glow in its own colour.
+struct AlbumArtView: View {
+    let image: NSImage?
+    let playing: Bool
+    let accent: Color
+
+    var body: some View {
+        ArtworkView(image: image)
+            .frame(width: 118, height: 118)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.1), lineWidth: 0.6))
+            .shadow(color: accent.opacity(playing ? 0.35 : 0.15), radius: playing ? 18 : 8, y: playing ? 8 : 3)
+            .scaleEffect(playing ? 1 : 0.86)
+            .animation(.spring(response: 0.5, dampingFraction: 0.72), value: playing)
+            .animation(.easeInOut(duration: 0.3), value: image)
+            .frame(width: 124, height: 124)
+    }
+}
+
 struct VinylView: View {
     @ObservedObject var turntable: Turntable
     @ObservedObject var controller: MusicController
@@ -973,13 +1010,18 @@ struct VinylView: View {
 struct MusicPanel: View {
     @ObservedObject var controller: MusicController
     let turntable: Turntable
+    @ObservedObject private var prefs = Prefs.shared
 
     var body: some View {
         ZStack {
             backdrop
             if let np = controller.now {
                 HStack(spacing: 18) {
-                    VinylView(turntable: turntable, controller: controller, image: controller.artwork)
+                    if prefs.vinyl {
+                        VinylView(turntable: turntable, controller: controller, image: controller.artwork)
+                    } else {
+                        AlbumArtView(image: controller.artwork, playing: np.isPlaying, accent: controller.accent)
+                    }
                     VStack(alignment: .leading, spacing: 0) {
                         source(np)
                             .padding(.bottom, 6)
@@ -1122,20 +1164,12 @@ struct MusicPanel: View {
         .frame(height: 28)
     }
 
+    // Apple Music-style transport: bare white glyphs, play the biggest.
     private func controls(_ np: NowPlaying) -> some View {
-        HStack(spacing: 18) {
-            ctrl("backward.fill", size: 12) { controller.previous() }
-            Button { controller.playPause() } label: {
-                Image(systemName: np.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 16, weight: .bold))
-                    .contentTransition(.symbolEffect(.replace))
-                    .foregroundColor(.white)
-                    .frame(width: 40, height: 40)
-                    .darkGlass(Circle(), intensity: 1.15)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(PressStyle())
-            ctrl("forward.fill", size: 12) { controller.next() }
+        HStack(spacing: 30) {
+            ctrl("backward.fill", size: 16) { controller.previous() }
+            ctrl(np.isPlaying ? "pause.fill" : "play.fill", size: 24) { controller.playPause() }
+            ctrl("forward.fill", size: 16) { controller.next() }
         }
         .frame(maxWidth: .infinity, alignment: .center)
     }
@@ -1143,13 +1177,13 @@ struct MusicPanel: View {
     private func ctrl(_ symbol: String, size: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: size, weight: .bold))
-                .foregroundColor(.white.opacity(0.88))
-                .frame(width: 30, height: 30)
-                .darkGlass(Circle(), intensity: 0.6)
-                .contentShape(Circle())
+                .font(.system(size: size, weight: .semibold))
+                .contentTransition(.symbolEffect(.replace))
+                .foregroundColor(.white)
+                .frame(width: 38, height: 34)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(PressStyle())
+        .buttonStyle(PressStyle(scale: 0.8))
     }
 
     private static func mmss(_ t: Double) -> String {

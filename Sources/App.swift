@@ -128,10 +128,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SystemHUD.shared.sync()                    // volume/brightness → island
         SystemEvents.shared.sync()                 // USB / Bluetooth / Wi-Fi / charger → notch
         NotificationMirror.shared.sync()           // other apps' notification banners → notch
+        LockScreenMusic.shared.start()             // Now Playing card on the lock screen
 
         // Debug hook for screenshot verification (MYNOTCH_EXPAND=1 [MYNOTCH_TAB=…]).
         let env = ProcessInfo.processInfo.environment
         if env["MYNOTCH_PIN"] == "1" { NotchState.shared.debugPinned = true }
+        if env["MYNOTCH_FAKEMUSIC"] == "1" { MusicController.shared.debugFake() }
+        if env["MYNOTCH_LOCKPREVIEW"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { LockScreenMusic.shared.show(onLockScreen: false) }
+        }
         if let keys = env["MYNOTCH_KEYS"] { SystemHUD.shared.runDebugKeys(keys) }
         // MYNOTCH_TAPTEST=1: exercise the media-key pairing logic with a
         // counting stub (no real volume change), print results, quit.
