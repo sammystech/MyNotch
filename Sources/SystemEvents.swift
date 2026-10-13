@@ -336,14 +336,17 @@ final class SystemEvents: NSObject {
     }
     private static var forcedAC: Bool?
 
-    private func announceCharger(attempt: Int) {
+    private func announceCharger(attempt: Int, lastWatts: Int? = nil) {
         let info = Self.chargerInfo()
-        if info.watts == nil && attempt < 8 {
+        // Wait for the wattage, and for it to settle: USB-C PD first
+        // negotiates at 20V (a 140W MagSafe reads 94W) and steps up to 28V
+        // a moment later. Announce once two reads in a row agree.
+        if (info.watts == nil || info.watts != lastWatts) && attempt < 8 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 // Only a REAL unplug (5s settle) cancels this — a flicker
                 // while we wait for the wattage must not swallow the pop-up.
                 guard let self, self.chargerAnnounced else { return }
-                self.announceCharger(attempt: attempt + 1)
+                self.announceCharger(attempt: attempt + 1, lastWatts: info.watts)
             }
             return
         }
@@ -367,6 +370,13 @@ final class SystemEvents: NSObject {
         var watts: Int?
         if let d = IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any] {
             watts = (d[kIOPSPowerAdapterWattsKey] as? Int).flatMap { $0 > 0 ? $0 : nil }
+            // Apple adapters carry their rating in the name ("140W USB-C
+            // Power Adapter") — trust that over a mid-negotiation reading.
+            if let name = d["Name"] as? String,
+               let r = name.range(of: #"\d{2,3}(?=W)"#, options: .regularExpression),
+               let rated = Int(name[r]) {
+                watts = max(watts ?? 0, rated)
+            }
         }
         let port = magSafeActive ? "MagSafe" : "USB-C"
         // A flaky charger can catch IsCharging=false mid-dropout; only call it
