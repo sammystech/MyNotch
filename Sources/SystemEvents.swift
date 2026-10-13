@@ -178,7 +178,11 @@ final class SystemEvents: NSObject {
         // Headphones are announced by the audio switch (with the model glyph).
         guard !Self.isAudio(device), !Self.isIgnored(device),
               let name = Self.realName(device), let symbol = Self.btSymbol(device) else { return }
-        alert(name, "Connected", symbol, check: true)
+        // Battery level arrives a beat after the connection; give it a second.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            let battery = DeviceBattery.text(for: device)
+            self?.alert(name, ["Connected", battery].compactMap { $0 }.joined(separator: " · "), symbol, check: true)
+        }
     }
 
     @objc private func btDisconnected(_ note: IOBluetoothUserNotification, device: IOBluetoothDevice) {
@@ -210,7 +214,10 @@ final class SystemEvents: NSObject {
             let symbol: String? = isIgnored(d) ? nil
                 : isAudio(d) ? name.map { VolumeControl.headphoneSymbol(for: $0) } : btSymbol(d)
             let verdict = (name != nil && symbol != nil && !isIgnored(d)) ? "POP-UP (\(symbol!))" : "silent"
-            return "\(d.name ?? "<no name>") [class \(d.deviceClassMajor)/\(d.deviceClassMinor)] -> \(verdict)"
+            var probe = ""
+            for k in ["batteryPercentSingle", "batteryPercentLeft", "batteryPercentRight", "batteryPercentCase", "batteryPercentCombined"]
+                where d.responds(to: NSSelectorFromString(k)) { probe += " \(k)=\(d.value(forKey: k) ?? "nil")" }
+            return "\(d.name ?? "<no name>") [class \(d.deviceClassMajor)/\(d.deviceClassMinor)] connected=\(d.isConnected()) -> \(verdict)\(probe)"
         }
     }
 
@@ -440,5 +447,59 @@ final class SystemEvents: NSObject {
         case ..<88: return "battery.75percent"
         default: return "battery.100percent"
         }
+    }
+}
+
+// MARK: - Accessory battery
+
+/// Battery of a Bluetooth accessory, as macOS's own Bluetooth menu shows it.
+/// AirPods/Beats report per bud + case through IOBluetoothDevice's battery
+/// properties (private, so looked up by name — 0 means "not reporting");
+/// Magic Mouse/Keyboard/Trackpad report through their HID driver.
+enum DeviceBattery {
+    static func text(for d: IOBluetoothDevice) -> String? {
+        func pct(_ key: String) -> Int? {
+            guard d.responds(to: NSSelectorFromString(key)),
+                  let n = (d.value(forKey: key) as? NSNumber)?.intValue, n > 0, n <= 100 else { return nil }
+            return n
+        }
+        let l = pct("batteryPercentLeft"), r = pct("batteryPercentRight"), c = pct("batteryPercentCase")
+        if l != nil || r != nil {
+            var parts: [String] = []
+            if let l, let r, l == r { parts.append("\(l)%") }     // both buds the same: one number
+            else {
+                if let l { parts.append("L \(l)%") }
+                if let r { parts.append("R \(r)%") }
+            }
+            if let c { parts.append("Case \(c)%") }
+            return parts.joined(separator: " · ")
+        }
+        if let one = pct("batteryPercentSingle") ?? pct("batteryPercentCombined") { return "\(one)%" }
+        return hidBattery(named: d.name).map { "\($0)%" }
+    }
+
+    /// The connected Bluetooth device behind an audio output name.
+    static func text(forAudioDevice name: String) -> String? {
+        let connected = (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []).filter { $0.isConnected() }
+        guard let d = connected.first(where: { $0.name == name })
+                ?? connected.first(where: { name.contains($0.name ?? "\u{0}") || ($0.name ?? "").contains(name) })
+        else { return nil }
+        return text(for: d)
+    }
+
+    /// Magic accessories publish BatteryPercent on their HID service.
+    private static func hidBattery(named name: String?) -> Int? {
+        guard let name else { return nil }
+        var it: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault,
+                                           IOServiceMatching("AppleDeviceManagementHIDEventService"), &it) == KERN_SUCCESS
+        else { return nil }
+        defer { IOObjectRelease(it) }
+        while case let s = IOIteratorNext(it), s != 0 {
+            defer { IOObjectRelease(s) }
+            func prop(_ k: String) -> Any? { IORegistryEntryCreateCFProperty(s, k as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() }
+            if (prop("Product") as? String) == name, let p = prop("BatteryPercent") as? Int, p > 0 { return p }
+        }
+        return nil
     }
 }

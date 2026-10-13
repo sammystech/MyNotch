@@ -176,6 +176,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        if let name = env["MYNOTCH_BTTOAST"] {    // preview the headphones card with live battery
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                Toasts.shared.show(title: name, subtitle: ["Connected", DeviceBattery.text(forAudioDevice: name)]
+                    .compactMap { $0 }.joined(separator: " · "), icon: "device:airpodspro", sound: nil)
+            }
+        }
         if env["MYNOTCH_BTLIST"] == "1" {
             for l in SystemEvents.describePaired() { FileHandle.standardError.write(("BT " + l + "\n").data(using: .utf8)!) }
             exit(0)

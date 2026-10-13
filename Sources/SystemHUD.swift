@@ -499,8 +499,11 @@ final class SystemHUD {
         tap.handler = { [weak self] key, down, rep, fine in self?.handle(key, down: down, repeat: rep, fine: fine) ?? false }
         volume.onDeviceChange = { [weak self] in
             guard let self, self.volume.isHeadphones else { return }
-            Toasts.shared.show(title: self.volume.deviceName, subtitle: "Connected",
-                               icon: "device:" + self.volume.deviceSymbol, sound: nil)
+            let name = self.volume.deviceName, symbol = self.volume.deviceSymbol
+            // Same card as macOS's own: who connected and how charged each bud is.
+            let battery = DeviceBattery.text(forAudioDevice: name)
+            Toasts.shared.show(title: name, subtitle: ["Connected", battery].compactMap { $0 }.joined(separator: " · "),
+                               icon: "device:" + symbol, sound: nil)
         }
         volume.onExternalChange = { [weak self] in
             guard let self, Prefs.shared.systemHUD else { return }
