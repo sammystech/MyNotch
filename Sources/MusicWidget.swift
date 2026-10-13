@@ -89,7 +89,7 @@ final class Turntable: NSObject, ObservableObject {
         // Driven by the display's own refresh (120Hz on ProMotion), not a
         // fixed 60Hz timer. .common mode so it keeps running while the mouse
         // is held down (event tracking) — the default mode made it hitch.
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.notch else { return }
         let link = screen.displayLink(target: self, selector: #selector(frame))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)

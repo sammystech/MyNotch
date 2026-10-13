@@ -588,9 +588,7 @@ final class NotchController {
         }
     }
 
-    private func targetScreen() -> NSScreen? {
-        NSScreen.main ?? NSScreen.screens.first
-    }
+    private func targetScreen() -> NSScreen? { NSScreen.notch }
 
     // Fixed-size window, flush to the very top, centered horizontally.
     private func positionAtTop() {
@@ -603,7 +601,7 @@ final class NotchController {
 
     // Measure the real hardware notch so the collapsed pill fits it exactly.
     private static func detectNotch() -> CGSize {
-        guard let screen = NSScreen.main else { return CGSize(width: 220, height: 32) }
+        guard let screen = NSScreen.notch else { return CGSize(width: 220, height: 32) }
         let top = screen.safeAreaInsets.top
         if top > 0,
            let left = screen.auxiliaryTopLeftArea,
@@ -613,5 +611,15 @@ final class NotchController {
         }
         // No hardware notch — use a tidy pill.
         return CGSize(width: 220, height: 32)
+    }
+}
+
+extension NSScreen {
+    /// The display the island lives on: the one with the hardware notch, or
+    /// (no notch anywhere) the menu-bar display. Never `NSScreen.main` —
+    /// that's whichever display has focus, so with a second monitor plugged
+    /// in the island used to jump over to it.
+    static var notch: NSScreen? {
+        screens.first { $0.safeAreaInsets.top > 0 } ?? screens.first
     }
 }

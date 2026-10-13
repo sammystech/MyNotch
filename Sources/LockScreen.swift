@@ -67,7 +67,7 @@ final class LockScreenMusic {
     /// MYNOTCH_LOCKPREVIEW test hook, so it can be checked without locking.
     func show(onLockScreen: Bool) {
         guard Prefs.shared.lockScreenMusic || !onLockScreen,
-              let screen = NSScreen.screens.first else { return }
+              let screen = NSScreen.notch else { return }
         let size = NSSize(width: 460, height: 560)
         // Under the system clock, centred: the card's top sits about a third
         // of the way down, where iOS puts its Now Playing.
