@@ -175,7 +175,11 @@ final class SystemEvents: NSObject {
         if let d = device.register(forDisconnectNotification: self, selector: #selector(btDisconnected(_:device:))) {
             btDisconnects.append(d)
         }
-        // Headphones are announced by the audio switch (with the model glyph).
+        // Headphones get the big card (it also covers macOS's own banner).
+        if Self.isAudio(device), !Self.isIgnored(device), !quiet, let name = Self.realName(device) {
+            Toasts.shared.showDeviceCard(name: name, symbol: VolumeControl.headphoneSymbol(for: name))
+            return
+        }
         guard !Self.isAudio(device), !Self.isIgnored(device),
               let name = Self.realName(device), let symbol = Self.btSymbol(device) else { return }
         // Battery level arrives a beat after the connection; give it a second.
@@ -457,34 +461,52 @@ final class SystemEvents: NSObject {
 /// properties (private, so looked up by name — 0 means "not reporting");
 /// Magic Mouse/Keyboard/Trackpad report through their HID driver.
 enum DeviceBattery {
-    static func text(for d: IOBluetoothDevice) -> String? {
+    static func parts(for d: IOBluetoothDevice) -> [BatteryPart] {
         func pct(_ key: String) -> Int? {
             guard d.responds(to: NSSelectorFromString(key)),
                   let n = (d.value(forKey: key) as? NSNumber)?.intValue, n > 0, n <= 100 else { return nil }
             return n
         }
-        let l = pct("batteryPercentLeft"), r = pct("batteryPercentRight"), c = pct("batteryPercentCase")
-        if l != nil || r != nil {
-            var parts: [String] = []
-            if let l, let r, l == r { parts.append("\(l)%") }     // both buds the same: one number
-            else {
-                if let l { parts.append("L \(l)%") }
-                if let r { parts.append("R \(r)%") }
-            }
-            if let c { parts.append("Case \(c)%") }
-            return parts.joined(separator: " · ")
+        let pro = (d.name ?? "").lowercased().contains("pro")
+        var out: [BatteryPart] = []
+        if let l = pct("batteryPercentLeft") { out.append(BatteryPart(symbol: pro ? "airpodpro.left" : "airpod.left", label: "Left", percent: l)) }
+        if let r = pct("batteryPercentRight") { out.append(BatteryPart(symbol: pro ? "airpodpro.right" : "airpod.right", label: "Right", percent: r)) }
+        if let c = pct("batteryPercentCase") {
+            out.append(BatteryPart(symbol: pro ? "airpodspro.chargingcase.wireless" : "airpods.chargingcase", label: "Case", percent: c))
         }
-        if let one = pct("batteryPercentSingle") ?? pct("batteryPercentCombined") { return "\(one)%" }
-        return hidBattery(named: d.name).map { "\($0)%" }
+        if out.isEmpty, let one = pct("batteryPercentSingle") ?? pct("batteryPercentCombined") ?? hidBattery(named: d.name) {
+            out.append(BatteryPart(symbol: "battery.100percent", label: "Battery", percent: one))
+        }
+        return out
+    }
+
+    /// "L 84% · R 87% · Case 100%" (one number when both buds match).
+    static func text(for d: IOBluetoothDevice) -> String? {
+        let p = parts(for: d)
+        return p.isEmpty ? nil : summary(p, connected: false)
+    }
+
+    static func summary(_ p: [BatteryPart], connected: Bool) -> String {
+        var bits: [String] = connected ? ["Connected"] : []
+        let l = p.first { $0.label == "Left" }, r = p.first { $0.label == "Right" }
+        if let l, let r, l.percent == r.percent { bits.append("\(l.percent)%") }
+        else {
+            if let l { bits.append("L \(l.percent)%") }
+            if let r { bits.append("R \(r.percent)%") }
+        }
+        for x in p where x.label != "Left" && x.label != "Right" {
+            bits.append(x.label == "Battery" ? "\(x.percent)%" : "\(x.label) \(x.percent)%")
+        }
+        return bits.joined(separator: " · ")
     }
 
     /// The connected Bluetooth device behind an audio output name.
-    static func text(forAudioDevice name: String) -> String? {
+    static func parts(forAudioDevice name: String) -> [BatteryPart] {
         let connected = (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []).filter { $0.isConnected() }
         guard let d = connected.first(where: { $0.name == name })
                 ?? connected.first(where: { name.contains($0.name ?? "\u{0}") || ($0.name ?? "").contains(name) })
-        else { return nil }
-        return text(for: d)
+        else { return [] }
+        return parts(for: d)
     }
 
     /// Magic accessories publish BatteryPercent on their HID service.

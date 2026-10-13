@@ -20,7 +20,16 @@ struct ToastState: Equatable {
     var badge: String? = "check"       // trailing mark; nil = none
     var tall = false                   // notifications: room for a 2-line message
     var opensOnClick = false           // Claude/Codex: a click jumps to the app
+    var card = false                   // headphones: the big card with per-bud battery
+    var battery: [BatteryPart] = []
     var id = UUID()
+}
+
+/// One battery reading on the headphones card (left bud, right bud, case…).
+struct BatteryPart: Equatable {
+    let symbol: String
+    let label: String
+    let percent: Int
 }
 
 final class Toasts {
@@ -74,6 +83,70 @@ final class Toasts {
         let w = DispatchWorkItem { self.dismiss() }
         hideWork = w
         DispatchQueue.main.asyncAfter(deadline: .now() + (tall ? tallHoldTime : holdTime), execute: w)
+    }
+
+    // MARK: Headphones card
+    //
+    // When AirPods connect, macOS drops its own "Connected" banner (a
+    // MenuBarAgent window, ~352×152) right under the notch. We show a bigger
+    // card in the same spot, lift the island above the banner's window layer,
+    // and hold the card until the banner has gone — so ours is the one you see.
+    private var lastCard: (name: String, at: Date)?
+    private var coverTimer: Timer?
+
+    func showDeviceCard(name: String, symbol: String) {
+        // The Bluetooth connect and the audio-output switch both call this.
+        if let last = lastCard, last.name == name, Date().timeIntervalSince(last.at) < 8 { return }
+        lastCard = (name, Date())
+        let parts = DeviceBattery.parts(forAudioDevice: name)
+        let id = UUID()
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.72)) {
+            NotchState.shared.toast = ToastState(title: name, subtitle: DeviceBattery.summary(parts, connected: true),
+                                                 icon: "device:" + symbol, badge: nil, card: true,
+                                                 battery: parts, id: id)
+        }
+        // Buds report their levels a moment after connecting — refresh.
+        for delay in [0.8, 2.0, 3.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard var t = NotchState.shared.toast, t.id == id else { return }
+                let fresh = DeviceBattery.parts(forAudioDevice: name)
+                guard fresh != t.battery, !fresh.isEmpty else { return }
+                t.battery = fresh
+                t.subtitle = DeviceBattery.summary(fresh, connected: true)
+                withAnimation(.easeInOut(duration: 0.25)) { NotchState.shared.toast = t }
+            }
+        }
+        hideWork?.cancel(); hideWork = nil
+        coverTimer?.invalidate()
+        let started = Date()
+        var lastSeen = Date()
+        let t = Timer(timeInterval: 0.2, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            guard NotchState.shared.toast?.id == id else { timer.invalidate(); return }   // replaced/dismissed
+            if Self.systemBannerVisible() {
+                lastSeen = Date()
+                BannerDismisser.shared.dismissNow()
+            }
+            let age = Date().timeIntervalSince(started)
+            // At least 3.5s; then until the macOS banner has been gone 0.3s; never past 10s.
+            if (age > 3.5 && Date().timeIntervalSince(lastSeen) > 0.3) || age > 10 {
+                timer.invalidate()
+                self.dismiss()
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        coverTimer = t
+    }
+
+    /// Is macOS's own system banner (a MenuBarAgent window above the menu-bar
+    /// layer) on screen right now?
+    static func systemBannerVisible() -> Bool {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return false }
+        return list.contains {
+            ($0[kCGWindowOwnerName as String] as? String) == "MenuBarAgent"
+                && (($0[kCGWindowLayer as String] as? Int) ?? 0) >= 100
+                && ((($0[kCGWindowBounds as String] as? [String: Any])?["Height"] as? Double) ?? 0) > 60
+        }
     }
 
     func dismiss() {
@@ -209,9 +282,14 @@ struct ToastIslandContent: View {
     var body: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: notchHeight)          // the hardware notch
-            row
-                .padding(.horizontal, 16)
-                .frame(maxHeight: .infinity)
+            if toast.card {
+                DeviceCardView(toast: toast).id(toast.id)
+                    .frame(maxHeight: .infinity)
+            } else {
+                row
+                    .padding(.horizontal, 16)
+                    .frame(maxHeight: .infinity)
+            }
         }
         .overlay(Sheen().id(toast.id).allowsHitTesting(false))
     }
@@ -351,5 +429,154 @@ extension Color {
         let v = UInt64(hex, radix: 16) ?? 0xFFFFFF
         self.init(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255,
                   blue: Double(v & 0xFF) / 255)
+    }
+}
+
+// The headphones pop-up: same size as the others, with a battery reading
+// per part (left, right, case) where the message line would be.
+private struct DeviceCardView: View {
+    let toast: ToastState
+    @StateObject private var go = AppearTrigger()
+
+    var body: some View {
+        HStack(spacing: 11) {
+            ToastIcon(icon: toast.icon)
+                .scaleEffect(go.fired ? 1 : 0.4)
+                .opacity(go.fired ? 1 : 0)
+                .animation(.spring(response: 0.45, dampingFraction: 0.6), value: go.fired)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(toast.title)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .lineLimit(1)
+                if toast.battery.isEmpty {
+                    Text("Connected")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundColor(.white.opacity(0.55))
+                } else {
+                    HStack(spacing: 9) {
+                        ForEach(toast.battery, id: \.label) { BatteryChip(part: $0) }
+                    }
+                }
+            }
+            .modifier(Rise(delay: 0.1, go: go.fired))
+            Spacer(minLength: 0)
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 16)
+        .onAppear { DispatchQueue.main.async { go.fired = true } }
+    }
+}
+
+private struct BatteryChip: View {
+    let part: BatteryPart
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: part.symbol)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+            Text("\(part.percent)%")
+                .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                .foregroundColor(part.percent <= 20 ? Color(red: 1, green: 0.35, blue: 0.3)
+                                                    : Color(red: 0.3, green: 0.86, blue: 0.45))
+        }
+        .help(part.label)
+    }
+}
+
+// MARK: - Closing macOS's own "Connected" banner
+
+/// macOS's banner lives in MenuBarAgent, which is visible to Accessibility
+/// (My Notch already has that permission). Look for the banner's window
+/// and close it through whatever dismiss action it offers. Every attempt is
+/// written to ~/Library/Logs/MyNotch-banner.log so it can be checked.
+final class BannerDismisser {
+    static let shared = BannerDismisser()
+    private let queue = DispatchQueue(label: "MyNotch.banner-dismiss")
+    private var busy = false        // queue only
+    private var dumped = false      // queue only: full tree logged once per launch
+
+    func dismissNow() {
+        queue.async { [self] in
+            guard !busy else { return }
+            busy = true
+            defer { busy = false }
+            attempt()
+        }
+    }
+
+    private func attempt() {
+        guard AXIsProcessTrusted(),
+              let agent = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first
+                ?? NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == "MenuBarAgent" })
+        else { log("no MenuBarAgent / no AX"); return }
+        let app = AXUIElementCreateApplication(agent.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 0.3)
+        var w: AnyObject?
+        AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &w)
+        for win in (w as? [AXUIElement]) ?? [] {
+            guard let size = Self.size(win), size.height > 60 else { continue }   // skip the menu bar itself
+            if !dumped { dumped = true; log("banner window \(size):\n" + Self.tree(win, 0)) }
+            // 1) Any element offering a close/dismiss action.
+            if let (el, name) = Self.findAction(win, depth: 0) {
+                let r = AXUIElementPerformAction(el, name as CFString)
+                log("performed \(name.replacingOccurrences(of: "\n", with: " ")) -> \(r.rawValue)")
+                if r == .success { return }
+            }
+            // 2) Cancel on the window.
+            let c = AXUIElementPerformAction(win, kAXCancelAction as CFString)
+            log("AXCancel -> \(c.rawValue)")
+            if c == .success { return }
+            // 3) Move it off screen.
+            var off = CGPoint(x: -10000, y: -10000)
+            if let v = AXValueCreate(.cgPoint, &off) {
+                let m = AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, v)
+                log("move offscreen -> \(m.rawValue)")
+            }
+        }
+    }
+
+    private static func size(_ e: AXUIElement) -> CGSize? {
+        var v: AnyObject?
+        guard AXUIElementCopyAttributeValue(e, kAXSizeAttribute as CFString, &v) == .success, let v else { return nil }
+        var s = CGSize.zero
+        AXValueGetValue(v as! AXValue, .cgSize, &s)
+        return s
+    }
+
+    private static func actions(_ e: AXUIElement) -> [String] {
+        var n: CFArray?
+        AXUIElementCopyActionNames(e, &n)
+        return (n as? [String]) ?? []
+    }
+
+    private static func children(_ e: AXUIElement) -> [AXUIElement] {
+        var c: AnyObject?
+        AXUIElementCopyAttributeValue(e, kAXChildrenAttribute as CFString, &c)
+        return (c as? [AXUIElement]) ?? []
+    }
+
+    private static func findAction(_ e: AXUIElement, depth: Int) -> (AXUIElement, String)? {
+        guard depth < 8 else { return nil }
+        if let a = actions(e).first(where: {
+            let l = $0.lowercased(); return l.contains("close") || l.contains("dismiss")
+        }) { return (e, a) }
+        for c in children(e) { if let hit = findAction(c, depth: depth + 1) { return hit } }
+        return nil
+    }
+
+    private static func tree(_ e: AXUIElement, _ d: Int) -> String {
+        guard d < 8 else { return "" }
+        func a(_ k: String) -> String { var v: AnyObject?; AXUIElementCopyAttributeValue(e, k as CFString, &v); return v.map { "\($0)" } ?? "" }
+        var out = String(repeating: "  ", count: d)
+            + "\(a("AXRole"))/\(a("AXSubrole")) id=\(a("AXIdentifier")) title=\(a("AXTitle")) desc=\(a("AXDescription")) value=\(a("AXValue").prefix(40)) actions=\(actions(e))\n"
+        for c in children(e) { out += tree(c, d + 1) }
+        return out
+    }
+
+    private func log(_ s: String) {
+        let url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/MyNotch-banner.log")
+        let line = "\(Date()) \(s)\n"
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
+        else { try? line.write(to: url, atomically: true, encoding: .utf8) }
     }
 }

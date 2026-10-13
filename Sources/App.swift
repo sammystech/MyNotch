@@ -82,6 +82,10 @@ final class NotchState: ObservableObject {
     let toastDrop: CGFloat = 46
 
     var collapsedVisibleSize: CGSize {
+        if hud == nil, let toast, toast.card {
+            // A little wider than a plain pop-up, for the battery readings.
+            return CGSize(width: notchSize.width + toastWing * 2 + 24, height: notchSize.height + toastDrop)
+        }
         if hud == nil, let toast {
             return CGSize(width: notchSize.width + toastWing * 2,
                           height: notchSize.height + toastDrop + (toast.tall ? 14 : 0))
@@ -178,8 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let name = env["MYNOTCH_BTTOAST"] {    // preview the headphones card with live battery
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                Toasts.shared.show(title: name, subtitle: ["Connected", DeviceBattery.text(forAudioDevice: name)]
-                    .compactMap { $0 }.joined(separator: " · "), icon: "device:airpodspro", sound: nil)
+                Toasts.shared.showDeviceCard(name: name, symbol: VolumeControl.headphoneSymbol(for: name))
             }
         }
         if env["MYNOTCH_BTLIST"] == "1" {

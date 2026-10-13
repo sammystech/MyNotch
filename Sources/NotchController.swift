@@ -231,6 +231,16 @@ final class NotchController {
             self?.endFileDrag(keepOpen: true)
         }
 
+        // The headphones card has to sit ABOVE macOS's own "Connected"
+        // banner (a MenuBarAgent window at layer 101) to hide it.
+        state.$toast
+            .map { $0?.card == true }
+            .removeDuplicates()
+            .sink { [weak self] card in
+                self?.panel.level = NSWindow.Level(rawValue: card ? 102 : NSWindow.Level.statusBar.rawValue + 1)
+            }
+            .store(in: &bag)
+
         // Whenever any geometry-affecting state changes, remeasure tracking.
         Publishers.MergeMany(
             state.$expanded.map { _ in () }.eraseToAnyPublisher(),
