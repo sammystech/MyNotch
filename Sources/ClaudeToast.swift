@@ -120,7 +120,7 @@ final class Toasts {
         coverTimer?.invalidate()
         let started = Date()
         var lastSeen = Date()
-        let t = Timer(timeInterval: 0.2, repeats: true) { [weak self] timer in
+        let t = Timer(timeInterval: 0.05, repeats: true) { [weak self] timer in
             guard let self else { timer.invalidate(); return }
             guard NotchState.shared.toast?.id == id else { timer.invalidate(); return }   // replaced/dismissed
             if Self.systemBannerVisible() {
@@ -128,7 +128,7 @@ final class Toasts {
                 BannerDismisser.shared.dismissNow()
             }
             let age = Date().timeIntervalSince(started)
-            // At least 3.5s; then until the macOS banner has been gone 0.3s; never past 10s.
+            // At least 3.5s, longer only if the macOS banner is somehow still up; never past 10s.
             if (age > 3.5 && Date().timeIntervalSince(lastSeen) > 0.3) || age > 10 {
                 timer.invalidate()
                 self.dismiss()
@@ -143,9 +143,11 @@ final class Toasts {
     static func systemBannerVisible() -> Bool {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return false }
         return list.contains {
-            ($0[kCGWindowOwnerName as String] as? String) == "MenuBarAgent"
+            let b = $0[kCGWindowBounds as String] as? [String: Any]
+            return ($0[kCGWindowOwnerName as String] as? String) == "MenuBarAgent"
                 && (($0[kCGWindowLayer as String] as? Int) ?? 0) >= 100
-                && ((($0[kCGWindowBounds as String] as? [String: Any])?["Height"] as? Double) ?? 0) > 60
+                && ((b?["Height"] as? Double) ?? 0) > 60
+                && ((b?["X"] as? Double) ?? -1e5) > -1000          // not one we already moved away
         }
     }
 
@@ -483,100 +485,42 @@ private struct BatteryChip: View {
     }
 }
 
-// MARK: - Closing macOS's own "Connected" banner
+// MARK: - Hiding macOS's own "Connected" banner
 
-/// macOS's banner lives in MenuBarAgent, which is visible to Accessibility
-/// (My Notch already has that permission). Look for the banner's window
-/// and close it through whatever dismiss action it offers. Every attempt is
-/// written to ~/Library/Logs/MyNotch-banner.log so it can be checked.
+/// macOS's AirPods banner is a MenuBarAgent window with the accessibility
+/// identifier "smart-routing-system-banner". It has no close action, but
+/// Accessibility (which My Notch already has) can move it — so it goes off
+/// screen the moment it appears, and our pop-up is the one you see.
 final class BannerDismisser {
     static let shared = BannerDismisser()
     private let queue = DispatchQueue(label: "MyNotch.banner-dismiss")
     private var busy = false        // queue only
-    private var dumped = false      // queue only: full tree logged once per launch
 
     func dismissNow() {
         queue.async { [self] in
             guard !busy else { return }
             busy = true
             defer { busy = false }
-            attempt()
+            moveAway()
         }
     }
 
-    private func attempt() {
+    private func moveAway() {
         guard AXIsProcessTrusted(),
               let agent = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first
-                ?? NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == "MenuBarAgent" })
-        else { log("no MenuBarAgent / no AX"); return }
+        else { return }
         let app = AXUIElementCreateApplication(agent.processIdentifier)
         AXUIElementSetMessagingTimeout(app, 0.3)
         var w: AnyObject?
         AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &w)
         for win in (w as? [AXUIElement]) ?? [] {
-            guard let size = Self.size(win), size.height > 60 else { continue }   // skip the menu bar itself
-            if !dumped { dumped = true; log("banner window \(size):\n" + Self.tree(win, 0)) }
-            // 1) Any element offering a close/dismiss action.
-            if let (el, name) = Self.findAction(win, depth: 0) {
-                let r = AXUIElementPerformAction(el, name as CFString)
-                log("performed \(name.replacingOccurrences(of: "\n", with: " ")) -> \(r.rawValue)")
-                if r == .success { return }
-            }
-            // 2) Cancel on the window.
-            let c = AXUIElementPerformAction(win, kAXCancelAction as CFString)
-            log("AXCancel -> \(c.rawValue)")
-            if c == .success { return }
-            // 3) Move it off screen.
+            var ident: AnyObject?
+            AXUIElementCopyAttributeValue(win, kAXIdentifierAttribute as CFString, &ident)
+            guard (ident as? String) == "smart-routing-system-banner" else { continue }
             var off = CGPoint(x: -10000, y: -10000)
             if let v = AXValueCreate(.cgPoint, &off) {
-                let m = AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, v)
-                log("move offscreen -> \(m.rawValue)")
+                AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, v)
             }
         }
-    }
-
-    private static func size(_ e: AXUIElement) -> CGSize? {
-        var v: AnyObject?
-        guard AXUIElementCopyAttributeValue(e, kAXSizeAttribute as CFString, &v) == .success, let v else { return nil }
-        var s = CGSize.zero
-        AXValueGetValue(v as! AXValue, .cgSize, &s)
-        return s
-    }
-
-    private static func actions(_ e: AXUIElement) -> [String] {
-        var n: CFArray?
-        AXUIElementCopyActionNames(e, &n)
-        return (n as? [String]) ?? []
-    }
-
-    private static func children(_ e: AXUIElement) -> [AXUIElement] {
-        var c: AnyObject?
-        AXUIElementCopyAttributeValue(e, kAXChildrenAttribute as CFString, &c)
-        return (c as? [AXUIElement]) ?? []
-    }
-
-    private static func findAction(_ e: AXUIElement, depth: Int) -> (AXUIElement, String)? {
-        guard depth < 8 else { return nil }
-        if let a = actions(e).first(where: {
-            let l = $0.lowercased(); return l.contains("close") || l.contains("dismiss")
-        }) { return (e, a) }
-        for c in children(e) { if let hit = findAction(c, depth: depth + 1) { return hit } }
-        return nil
-    }
-
-    private static func tree(_ e: AXUIElement, _ d: Int) -> String {
-        guard d < 8 else { return "" }
-        func a(_ k: String) -> String { var v: AnyObject?; AXUIElementCopyAttributeValue(e, k as CFString, &v); return v.map { "\($0)" } ?? "" }
-        var out = String(repeating: "  ", count: d)
-            + "\(a("AXRole"))/\(a("AXSubrole")) id=\(a("AXIdentifier")) title=\(a("AXTitle")) desc=\(a("AXDescription")) value=\(a("AXValue").prefix(40)) actions=\(actions(e))\n"
-        for c in children(e) { out += tree(c, d + 1) }
-        return out
-    }
-
-    private func log(_ s: String) {
-        let url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/MyNotch-banner.log")
-        let line = "\(Date()) \(s)\n"
-        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
-        else { try? line.write(to: url, atomically: true, encoding: .utf8) }
     }
 }
